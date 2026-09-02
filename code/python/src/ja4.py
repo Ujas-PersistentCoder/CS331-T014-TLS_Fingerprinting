@@ -1,0 +1,1 @@
+# This is where JA4 implementation will be done. Out-of-scope as of now.
