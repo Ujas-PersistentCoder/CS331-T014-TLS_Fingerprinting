@@ -1,0 +1,210 @@
+{
+  "_readme": "Keys are the <label> prefix used in capture_harness.sh filenames (everything before the timestamp). catalog_pcaps.py looks up each pcap's label here for metadata. Add one entry per distinct client/server you captured.",
+
+  "curl_8_9_1": {
+    "role": "client",
+    "name": "curl",
+    "version": "8.9.1 (OpenSSL)",
+    "os": "linux",
+    "category": "cli",
+    "server_name": "openssl s_server (local test cert)"
+  },
+  "curl_tls13_only": {
+    "role": "client",
+    "name": "curl",
+    "version": "8.9.1 (--tlsv1.3 forced)",
+    "os": "linux",
+    "category": "cli"
+  },
+  "curl_cipher_restricted": {
+    "role": "client",
+    "name": "curl",
+    "version": "8.5.0 (cipher-restricted)",
+    "os": "linux",
+    "category": "cli",
+    "notes": "Forced to a small cipher list to create a distinct JA3 fingerprint and show how client stack configuration changes the handshake."
+  },
+  "openssl_s_client": {
+    "role": "client",
+    "name": "OpenSSL s_client",
+    "version": "3.x default",
+    "os": "linux",
+    "category": "cli",
+    "notes": "OpenSSL command-line client, useful for comparing command-line TLS stacks to curl and browser traffic."
+  },
+  "curl_impersonate_chrome": {
+    "role": "client",
+    "name": "curl-impersonate (Chrome mimic)",
+    "version": "unknown",
+    "os": "linux",
+    "category": "evasion"
+  },
+  "chrome_headless": {
+    "role": "client",
+    "name": "Chrome",
+    "version": "headless, current stable",
+    "os": "linux",
+    "category": "browser"
+  },
+  "firefox_headless": {
+    "role": "client",
+    "name": "Firefox",
+    "version": "headless, current stable",
+    "os": "linux",
+    "category": "browser"
+  },
+  "python_requests": {
+    "role": "client",
+    "name": "Python requests/urllib3",
+    "version": "unknown",
+    "os": "linux",
+    "category": "language"
+  },
+  "python_raw_ssl": {
+    "role": "client",
+    "name": "Python ssl module (default context)",
+    "version": "unknown",
+    "os": "linux",
+    "category": "language"
+  },
+  "custom_scapy_client": {
+    "role": "client",
+    "name": "Custom Scapy ClientHello",
+    "version": "n/a",
+    "os": "linux",
+    "category": "custom"
+  },
+  "openssl_s_server": {
+    "role": "server",
+    "name": "OpenSSL s_server",
+    "category": "server"
+  },
+  "nginx_server": {
+    "role": "server",
+    "name": "nginx (OpenSSL)",
+    "category": "server"
+  },
+  "python_http_server": {
+    "role": "server",
+    "name": "Python http.server + ssl",
+    "category": "server"
+  },
+  "curl_test" : {
+    "role": "client",
+    "name": "curl",
+    "version": "8.5.0",
+    "category": "cli"
+  },
+  "curl_test2": {
+    "role": "client",
+    "name": "curl",
+    "version": "legacy test capture 2",
+    "os": "linux",
+    "category": "cli",
+    "notes": "Old curl test pcap retained for continuity in the seed database."
+  },
+  "curl_test3": {
+    "role": "client",
+    "name": "curl",
+    "version": "legacy test capture 3",
+    "os": "linux",
+    "category": "cli",
+    "notes": "Old curl test pcap retained for continuity in the seed database."
+  },
+  "chrome_headless_playwright": {
+    "role": "client",
+    "name": "Chrome",
+    "version": "headless, Playwright Chromium",
+    "os": "linux",
+    "category": "browser",
+    "notes": "Capture with default browser TLS stack through Playwright. Good for comparison with curl and custom clients."
+  },
+  "firefox_headless_playwright": {
+    "role": "client",
+    "name": "Firefox",
+    "version": "headless, Playwright Firefox",
+    "os": "linux",
+    "category": "browser",
+    "notes": "Capture with Firefox via Playwright. Useful for browser-family distinction."
+  },
+  "edge_headless_playwright": {
+    "role": "client",
+    "name": "Edge",
+    "version": "headless, Chromium-based",
+    "os": "linux",
+    "category": "browser",
+    "notes": "Optional verification if Edge is available in the environment."
+  },
+  "brave_headless": {
+    "role": "client",
+    "name": "Brave",
+    "version": "headless, Chromium-based",
+    "os": "linux",
+    "category": "browser",
+    "notes": "Useful for distinguishing modern Chromium variants."
+  },
+  "curl_impersonate_firefox": {
+    "role": "client",
+    "name": "curl-impersonate (Firefox mimic)",
+    "version": "unknown",
+    "os": "linux",
+    "category": "evasion",
+    "notes": "Mimics Firefox JA3/JA4; ideal for evasion discussion."
+  },
+  "node_https_default": {
+    "role": "client",
+    "name": "Node.js https",
+    "version": "default TLS stack",
+    "os": "linux",
+    "category": "language",
+    "notes": "Node's built-in https module. Capture as a baseline for JS TLS behavior."
+  },
+  "go_net_http": {
+    "role": "client",
+    "name": "Go net/http",
+    "version": "default TLS stack",
+    "os": "linux",
+    "category": "language",
+    "notes": "Go's standard library TLS fingerprint is distinct from browsers and curl."
+  },
+  "java_https_urlconnection": {
+    "role": "client",
+    "name": "Java HttpsURLConnection",
+    "version": "JDK default",
+    "os": "linux",
+    "category": "language",
+    "notes": "Java default TLS stack is a useful library baseline."
+  },
+  "sslyze_scan": {
+    "role": "client",
+    "name": "SSLyze",
+    "version": "scanner",
+    "os": "linux",
+    "category": "pentest",
+    "notes": "Tooling client used to probe servers; good for legitimate scanner examples."
+  },
+  "testssl_sh_scan": {
+    "role": "client",
+    "name": "testssl.sh",
+    "version": "scanner",
+    "os": "linux",
+    "category": "pentest",
+    "notes": "Script-based TLS scanner; useful for comparison with browsers and curl."
+  },
+  "nmap_ssl_enum_ciphers": {
+    "role": "client",
+    "name": "nmap --script ssl-enum-ciphers",
+    "version": "scanner",
+    "os": "linux",
+    "category": "pentest",
+    "notes": "Another valid TLS scanner fingerprint for the database."
+  },
+  "public_malware_reference": {
+    "role": "client",
+    "name": "Malware reference traffic",
+    "version": "public PCAPs / labeled samples",
+    "os": "n/a",
+    "category": "malware",
+    "notes": "Use labeled public malware PCAPs only; do not execute malware locally."
+  }
+}
