@@ -1,50 +1,62 @@
 #include "tlsfp/ja3.hpp"
 #include <openssl/evp.h>
-#include <iomanip>
-#include <sstream>
+#include <charconv>
 
 namespace tlsfp {
 
+// Ground 3: Zero-allocation integer formatting via C++17 std::to_chars
 template <typename T>
-static void append_joined(std::string &out, const std::vector<T> &vec, char delimiter = '-') {
+static inline void append_joined(std::string &out, const std::vector<T> &vec, char delimiter = '-') {
+    char num_buf[16];
     for (size_t i = 0; i < vec.size(); ++i) {
-        if (i > 0) out += delimiter;
-        out += std::to_string(static_cast<uint32_t>(vec[i]));
+        if (i > 0) {
+            out += delimiter;
+        }
+        auto [ptr, ec] = std::to_chars(num_buf, num_buf + sizeof(num_buf), static_cast<uint32_t>(vec[i]));
+        out.append(num_buf, static_cast<size_t>(ptr - num_buf));
     }
 }
 
 std::string md5_hex(const std::string &input) {
+    // Ground 3: Reusable thread-local context avoids heap allocation per packet
+    static thread_local EVP_MD_CTX *t_md5_ctx = nullptr;
+    if (!t_md5_ctx) {
+        t_md5_ctx = EVP_MD_CTX_new();
+        if (!t_md5_ctx) return "";
+    }
+
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int digest_len = 0;
 
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (!ctx) return "";
-
-    if (EVP_DigestInit_ex(ctx, EVP_md5(), nullptr) != 1 ||
-        EVP_DigestUpdate(ctx, input.data(), input.size()) != 1 ||
-        EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
-        EVP_MD_CTX_free(ctx);
+    if (EVP_DigestInit_ex(t_md5_ctx, EVP_md5(), nullptr) != 1 ||
+        EVP_DigestUpdate(t_md5_ctx, input.data(), input.size()) != 1 ||
+        EVP_DigestFinal_ex(t_md5_ctx, digest, &digest_len) != 1) {
         return "";
     }
-    EVP_MD_CTX_free(ctx);
 
-    // Convert raw 16 bytes to 32-character lowercase hex string
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (unsigned int i = 0; i < digest_len; ++i) {
-        oss << std::setw(2) << static_cast<int>(digest[i]);
+    // Ground 3: Direct 16-byte nibble LUT conversion (Replaces std::ostringstream)
+    static constexpr char HEX_LUT[] = "0123456789abcdef";
+    std::string hex_str;
+    hex_str.resize(32);
+
+    for (size_t i = 0; i < 16; ++i) {
+        hex_str[i * 2]     = HEX_LUT[(digest[i] >> 4) & 0x0F];
+        hex_str[i * 2 + 1] = HEX_LUT[digest[i] & 0x0F];
     }
-    return oss.str();
+
+    return hex_str;
 }
 
 JA3Fingerprint compute_ja3(const ClientHelloData &client) {
     JA3Fingerprint fp;
     
-    // Pre-reserve to minimize reallocations
-    fp.raw_string.reserve(256);
+    // Ground 2: Pre-allocate 512 bytes to cover modern post-quantum ClientHellos
+    fp.raw_string.reserve(512);
 
-    // 1. SSLVersion (in decimal)
-    fp.raw_string += std::to_string(client.client_version);
+    // 1. SSLVersion (using stack buffer)
+    char ver_buf[16];
+    auto [ptr, ec] = std::to_chars(ver_buf, ver_buf + sizeof(ver_buf), client.client_version);
+    fp.raw_string.append(ver_buf, static_cast<size_t>(ptr - ver_buf));
     fp.raw_string += ',';
 
     // 2. Cipher Suites
@@ -72,11 +84,14 @@ JA3Fingerprint compute_ja3s(const ServerHelloData &server) {
     fp.raw_string.reserve(128);
 
     // 1. SSLVersion
-    fp.raw_string += std::to_string(server.server_version);
+    char ver_buf[16];
+    auto [ptr, ec] = std::to_chars(ver_buf, ver_buf + sizeof(ver_buf), server.server_version);
+    fp.raw_string.append(ver_buf, static_cast<size_t>(ptr - ver_buf));
     fp.raw_string += ',';
 
     // 2. Selected Cipher Suite
-    fp.raw_string += std::to_string(server.selected_cipher);
+    auto [c_ptr, c_ec] = std::to_chars(ver_buf, ver_buf + sizeof(ver_buf), server.selected_cipher);
+    fp.raw_string.append(ver_buf, static_cast<size_t>(c_ptr - ver_buf));
     fp.raw_string += ',';
 
     // 3. Extensions

@@ -16,39 +16,42 @@ struct ClientHelloData {
     uint16_t client_version{0};
     std::vector<uint16_t> cipher_suites;
     std::vector<uint16_t> extensions;
-    std::vector<uint16_t> supported_groups;   // Elliptic curves (Ext 0x000a)
-    std::vector<uint8_t>  ec_point_formats;   // Point formats (Ext 0x000b)
-    std::vector<std::string> alpn_protocols;  // Ext 0x0010
-    std::vector<uint16_t> supported_versions; // Ext 0x002b (TLS 1.3 indicators)
-    std::string sni;                          // Ext 0x0000
-    bool has_sni{false};
+    std::vector<uint16_t> supported_groups;
+    std::vector<uint8_t>  ec_point_formats;
+    std::vector<uint16_t> supported_versions;
+    std::vector<uint16_t> signature_algorithms; // Required for JA4_c
 
-    void clear() {
+    bool has_sni{false};
+    std::string_view sni;                       // Zero-allocation string_view
+    std::string_view first_alpn;                // Required for JA4_a
+
+    void clear() noexcept {
         client_version = 0;
         cipher_suites.clear();
         extensions.clear();
         supported_groups.clear();
         ec_point_formats.clear();
         supported_versions.clear();
-        alpn_protocols.clear();
-        sni.clear();
+        signature_algorithms.clear();
         has_sni = false;
+        sni = {};
+        first_alpn = {};
     }
 };
 
 struct ServerHelloData {
     uint16_t server_version{0};
+    uint16_t selected_version{0};
     uint16_t selected_cipher{0};
     std::vector<uint16_t> extensions;
-    uint16_t selected_version{0};             // Ext 0x002b
-    std::string negotiated_alpn;              // Ext 0x0010
+    std::string_view first_alpn; // Added: Server-negotiated ALPN protocol
 
-    void clear() {
+    void clear() noexcept {
         server_version = 0;
+        selected_version = 0;
         selected_cipher = 0;
         extensions.clear();
-        selected_version = 0;
-        negotiated_alpn.clear();
+        first_alpn = {};
     }
 };
 
