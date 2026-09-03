@@ -1,0 +1,146 @@
+{
+  "ja3": [
+    {
+      "hash": "78f0dc5ac5b19daf131a133cfdee9691",
+      "client": "curl_test2",
+      "version": "",
+      "os": "",
+      "category": "uncatalogued",
+      "source": "self-captured: curl_test2_20260831_053405.pcap",
+      "notes": ""
+    },
+    {
+      "hash": "c9c1eed92382442399b8d87cbe8a6779",
+      "client": "curl",
+      "version": "8.9.1 (--tlsv1.3 forced)",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: curl_tls13_only_20260831_055634.pcap",
+      "notes": ""
+    },
+    {
+      "hash": "c12b4ccd5320bbb380ca1a9df90f771d",
+      "client": "Python ssl module (default context)",
+      "version": "unknown",
+      "os": "linux",
+      "category": "library",
+      "source": "self-captured: python_raw_ssl_20260831_055700.pcap",
+      "notes": ""
+    },
+    {
+      "hash": "d1256e7161e0b959c8241fa7b575bfbb",
+      "client": "Chrome",
+      "version": "headless, current stable",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: chrome_headless_20260831_061717.pcap",
+      "notes": ""
+    },
+    {
+      "hash": "61f4b05e6740e200bcc96a25d7109077",
+      "client": "Chrome",
+      "version": "headless, current stable",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: chrome_headless_20260831_061945.pcap",
+      "notes": ""
+    },
+    {
+      "hash": "06260de10ab01f67d90cdbd3fcf216a7",
+      "client": "Firefox",
+      "version": "headless, current stable",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: firefox_headless_20260831_061342.pcap",
+      "notes": ""
+    }
+  ],
+  "ja3s": [
+    {
+      "hash": "15af977ce25de452b96affa2addb1036",
+      "server": "curl_test2",
+      "category": "server",
+      "source": "self-captured: curl_test2_20260831_053405.pcap",
+      "notes": ""
+    },
+    {
+      "hash": "f4febc55ea12b31ae17cfb7e614afda8",
+      "server": "chrome_headless",
+      "category": "server",
+      "source": "self-captured: chrome_headless_20260831_061717.pcap",
+      "notes": ""
+    }
+  ],
+  "ja4": [
+    {
+      "hash": "t13i3111h2_e8f1e7e78f70_b26ce05bbdd6",
+      "client": "curl_test2",
+      "version": "",
+      "os": "",
+      "category": "uncatalogued",
+      "source": "self-captured: curl_test2_20260831_053405.pcap",
+      "notes": "JA4 best-effort, verify against reference"
+    },
+    {
+      "hash": "t13i0410h2_16476d049b0b_303c7117418d",
+      "client": "curl",
+      "version": "8.9.1 (--tlsv1.3 forced)",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: curl_tls13_only_20260831_055634.pcap",
+      "notes": "JA4 best-effort, verify against reference"
+    },
+    {
+      "hash": "t13i311000_e8f1e7e78f70_d41ae481755e",
+      "client": "Python ssl module (default context)",
+      "version": "unknown",
+      "os": "linux",
+      "category": "library",
+      "source": "self-captured: python_raw_ssl_20260831_055700.pcap",
+      "notes": "JA4 best-effort, verify against reference"
+    },
+    {
+      "hash": "t13i3111h1_e8f1e7e78f70_b26ce05bbdd6",
+      "client": "Python requests/urllib3",
+      "version": "unknown",
+      "os": "linux",
+      "category": "library",
+      "source": "self-captured: python_requests_20260831_055653.pcap",
+      "notes": "JA4 best-effort, verify against reference"
+    },
+    {
+      "hash": "t13i1515h2_8daaf6152771_806a8c22fdea",
+      "client": "Chrome",
+      "version": "headless, current stable",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: chrome_headless_20260831_061717.pcap",
+      "notes": "JA4 best-effort, verify against reference"
+    },
+    {
+      "hash": "t13i1516h2_8daaf6152771_3cbfd9057e0d",
+      "client": "Firefox",
+      "version": "headless, current stable",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: firefox_headless_20260831_061342.pcap",
+      "notes": "JA4 best-effort, verify against reference"
+    }
+  ],
+  "ja4s": [
+    {
+      "hash": "t130200_1302_a56c5b993250",
+      "server": "curl_test2",
+      "category": "server",
+      "source": "self-captured: curl_test2_20260831_053405.pcap",
+      "notes": "JA4S best-effort, verify against reference"
+    },
+    {
+      "hash": "t130200_1301_a56c5b993250",
+      "server": "chrome_headless",
+      "category": "server",
+      "source": "self-captured: chrome_headless_20260831_061717.pcap",
+      "notes": "JA4S best-effort, verify against reference"
+    }
+  ]
+}
