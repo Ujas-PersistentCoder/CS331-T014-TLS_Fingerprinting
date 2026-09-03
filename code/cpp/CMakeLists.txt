@@ -11,7 +11,7 @@ endif()
 find_path(PCAP_INCLUDE_DIR NAMES pcap.h)
 find_library(PCAP_LIBRARY NAMES pcap)
 if(NOT PCAP_LIBRARY OR NOT PCAP_INCLUDE_DIR)
-    message(FATAL_ERROR "libpcap development files not found. Run: sudo apt install libpcap-dev")
+    message(FATAL_ERROR "libpcap/npcap development files not found.")
 endif()
 
 add_library(pcap::pcap UNKNOWN IMPORTED)
@@ -27,6 +27,7 @@ find_package(Threads REQUIRED)
 add_executable(tlsfp_engine
     src/main.cpp
     src/capture.cpp
+    src/db.cpp
     src/parser.cpp
     src/ja3.cpp
     src/ja4.cpp
@@ -63,4 +64,5 @@ target_link_libraries(tlsfp_engine PRIVATE
     pcap::pcap
     OpenSSL::Crypto
     Threads::Threads
-)
+)
+
