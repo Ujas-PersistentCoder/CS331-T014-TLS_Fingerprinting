@@ -1,0 +1,101 @@
+No.     Time           Source                Destination           Protocol Length Info
+     41 2.398702       2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a 2620:1ec:29:1::68     TLSv1.3  923    Client Hello (SNI=main.vscode-cdn.net)
+
+Frame 41: Packet, 923 bytes on wire (7384 bits), 923 bytes captured (7384 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 6, Src: 2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a, Dst: 2620:1ec:29:1::68
+Transmission Control Protocol, Src Port: 59103, Dst Port: 443, Seq: 1244, Ack: 1, Len: 837
+[2 Reassembled TCP Segments (2080 bytes): #40(1243), #41(837)]
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+     49 2.498302       2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a 2620:1ec:29:1::68     TLSv1.3  980    Change Cipher Spec, Client Hello (SNI=main.vscode-cdn.net)
+
+Frame 49: Packet, 980 bytes on wire (7840 bits), 980 bytes captured (7840 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 6, Src: 2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a, Dst: 2620:1ec:29:1::68
+Transmission Control Protocol, Src Port: 59103, Dst Port: 443, Seq: 2081, Ack: 100, Len: 894
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+    290 8.359692       10.53.189.105         20.50.201.200         TLSv1.3  583    Client Hello (SNI=mobile.events.data.microsoft.com)
+
+Frame 290: Packet, 583 bytes on wire (4664 bits), 583 bytes captured (4664 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 4, Src: 10.53.189.105, Dst: 20.50.201.200
+Transmission Control Protocol, Src Port: 59104, Dst Port: 443, Seq: 1, Ack: 1, Len: 517
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+    295 8.719750       10.53.189.105         20.50.201.200         TLSv1.3  503    Change Cipher Spec, Client Hello (SNI=mobile.events.data.microsoft.com)
+
+Frame 295: Packet, 503 bytes on wire (4024 bits), 503 bytes captured (4024 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 4, Src: 10.53.189.105, Dst: 20.50.201.200
+Transmission Control Protocol, Src Port: 59104, Dst Port: 443, Seq: 518, Ack: 100, Len: 437
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+    447 15.980644      2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a 2606:4700::6810:7b60  TLSv1.3  603    Client Hello (SNI=www.cloudflare.com)
+
+Frame 447: Packet, 603 bytes on wire (4824 bits), 603 bytes captured (4824 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 6, Src: 2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a, Dst: 2606:4700::6810:7b60
+Transmission Control Protocol, Src Port: 59106, Dst Port: 443, Seq: 1, Ack: 1, Len: 517
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+    833 17.918783      10.53.189.105         20.50.201.200         TLSv1.3  583    Client Hello (SNI=mobile.events.data.microsoft.com)
+
+Frame 833: Packet, 583 bytes on wire (4664 bits), 583 bytes captured (4664 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 4, Src: 10.53.189.105, Dst: 20.50.201.200
+Transmission Control Protocol, Src Port: 59107, Dst Port: 443, Seq: 1, Ack: 1, Len: 517
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+    850 18.131838      10.53.189.105         20.50.201.200         TLSv1.3  503    Change Cipher Spec, Client Hello (SNI=mobile.events.data.microsoft.com)
+
+Frame 850: Packet, 503 bytes on wire (4024 bits), 503 bytes captured (4024 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 4, Src: 10.53.189.105, Dst: 20.50.201.200
+Transmission Control Protocol, Src Port: 59107, Dst Port: 443, Seq: 518, Ack: 100, Len: 437
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+    946 22.161938      2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a 2606:4700::6810:7b60  TLSv1.3  417    Client Hello (SNI=www.cloudflare.com)
+
+Frame 946: Packet, 417 bytes on wire (3336 bits), 417 bytes captured (3336 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 6, Src: 2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a, Dst: 2606:4700::6810:7b60
+Transmission Control Protocol, Src Port: 59108, Dst Port: 443, Seq: 1244, Ack: 1, Len: 331
+[2 Reassembled TCP Segments (1574 bytes): #945(1243), #946(331)]
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+   1499 23.387947      2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a 2a03:2880:f379:120:face:b00c:0:167 TLSv1.3  382    Client Hello (SNI=api.whatsapp.net)
+
+Frame 1499: Packet, 382 bytes on wire (3056 bits), 382 bytes captured (3056 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 6, Src: 2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a, Dst: 2a03:2880:f379:120:face:b00c:0:167
+Transmission Control Protocol, Src Port: 50870, Dst Port: 443, Seq: 1244, Ack: 1, Len: 296
+[2 Reassembled TCP Segments (1539 bytes): #1498(1243), #1499(296)]
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+   2480 26.918616      10.53.189.105         140.82.113.21         TLSv1.3  583    Client Hello (SNI=telemetry.individual.githubcopilot.com)
+
+Frame 2480: Packet, 583 bytes on wire (4664 bits), 583 bytes captured (4664 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 4, Src: 10.53.189.105, Dst: 140.82.113.21
+Transmission Control Protocol, Src Port: 59109, Dst Port: 443, Seq: 1, Ack: 1, Len: 517
+Transport Layer Security
+
+No.     Time           Source                Destination           Protocol Length Info
+   2503 27.349706      2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a 2606:4700::6810:7b60  TLSv1.3  603    Client Hello (SNI=www.cloudflare.com)
+
+Frame 2503: Packet, 603 bytes on wire (4824 bits), 603 bytes captured (4824 bits)
+Ethernet II, Src: 96:1a:d9:c3:cd:50 (96:1a:d9:c3:cd:50), Dst: 46:a2:5a:23:bc:86 (46:a2:5a:23:bc:86)
+Internet Protocol Version 6, Src: 2401:4900:ae51:b987:ed0c:7d40:b0fb:eb8a, Dst: 2606:4700::6810:7b60
+Transmission Control Protocol, Src Port: 59110, Dst Port: 443, Seq: 1, Ack: 1, Len: 517
+Transport Layer Security
