@@ -5,6 +5,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 
 namespace tlsfp {
@@ -55,6 +56,8 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
     char src_ip[INET6_ADDRSTRLEN];
     char dst_ip[INET6_ADDRSTRLEN];
 
+    FlowKey key{};
+
     if (ip_version == 4) {
         // --- IPv4 Path ---
         if (pkthdr->caplen < link_header_len + sizeof(struct ip)) return;
@@ -68,6 +71,11 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         inet_ntop(AF_INET, &(ip_hdr->ip_src), src_ip, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &(ip_hdr->ip_dst), dst_ip, INET_ADDRSTRLEN);
 
+        // Store binary IP addresses directly (Zero Heap Allocation)
+        key.ip_version = 4;
+        key.src_ip.v4 = ip_hdr->ip_src;
+        key.dst_ip.v4 = ip_hdr->ip_dst;
+
     } else if (ip_version == 6) {
         // --- IPv6 Path ---
         if (pkthdr->caplen < link_header_len + sizeof(struct ip6_hdr)) return;
@@ -79,6 +87,11 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
 
         inet_ntop(AF_INET6, &(ip6_hdr->ip6_src), src_ip, INET6_ADDRSTRLEN);
         inet_ntop(AF_INET6, &(ip6_hdr->ip6_dst), dst_ip, INET6_ADDRSTRLEN);
+
+        // Store binary IP addresses directly (Zero Heap Allocation)
+        key.ip_version = 6;
+        key.src_ip.v6 = ip6_hdr->ip6_src;
+        key.dst_ip.v6 = ip6_hdr->ip6_dst;
 
     } else {
         return; // Non-IP packet
@@ -95,25 +108,97 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         return;
     }
 
+    // Set 5-tuple ports
+    key.src_port = tcp_hdr->th_sport;
+    key.dst_port = tcp_hdr->th_dport;
+
     // 4. Calculate Payload Offset & Length
     size_t header_total_len = link_header_len + ip_header_len + tcp_header_len;
     if (pkthdr->caplen <= header_total_len) {
-        return; // Pure TCP ACK/SYN/FIN without data
+        return; // Pure TCP ACK/SYN/FIN or header-only frame
     }
 
     size_t payload_len = pkthdr->caplen - header_total_len;
     const uint8_t *payload = packet + header_total_len;
 
-    // 5. Validate TLS Record (5 bytes Record Header + 4 bytes Handshake Header = 9 bytes)
-    if (payload_len < 9 || payload[0] != 0x16) {
-        return; // Not a TLS Handshake record
+    // 5. TCP Sequence Alignment and Deduplication
+    StreamBuffer &buf = ctx->active_flows[key];
+    buf.last_seen = pkthdr->ts.tv_sec;
+
+    uint32_t seq = ntohl(tcp_hdr->th_seq);
+
+    if (!buf.seq_initialized) {
+        buf.next_seq = seq;
+        buf.seq_initialized = true;
     }
 
-    uint8_t handshake_type = payload[5];
+    if (seq < buf.next_seq) {
+        // Handle duplicate bytes / retransmissions
+        uint32_t diff = buf.next_seq - seq;
+        if (diff >= payload_len) return; // Entirely duplicate, discard
+        payload += diff;
+        payload_len -= diff;
+    } else if (seq > buf.next_seq) {
+        // Gap detected due to out-of-order packet: clear flow state
+        ctx->active_flows.erase(key);
+        return;
+    }
 
-    // 6. Process ClientHello (0x01) or ServerHello (0x02)
+    if (buf.len + payload_len > StreamBuffer::MAX_BUF_SIZE) {
+        ctx->active_flows.erase(key);
+        return;
+    }
+
+    std::memcpy(buf.bytes + buf.len, payload, payload_len);
+    buf.len += static_cast<uint16_t>(payload_len);
+    buf.next_seq += payload_len; // Advance expected sequence number
+
+    // 6. Inspect TLS Record Header
+    if (buf.len < 5) {
+        return; // Wait for full 5-byte TLS record header
+    }
+
+    uint8_t record_type  = buf.bytes[0];
+    uint8_t major_ver    = buf.bytes[1];
+    uint8_t minor_ver    = buf.bytes[2];
+    
+    // Declared here so it remains in scope for validation below
+    uint16_t tls_rec_len = (static_cast<uint16_t>(buf.bytes[3]) << 8) | buf.bytes[4];
+
+    bool is_valid_tls = (record_type == 0x16) && 
+                        (major_ver == 0x03) && 
+                        (minor_ver <= 0x04) && 
+                        (tls_rec_len <= 16384);
+
+    if (!is_valid_tls) {
+        ctx->active_flows.erase(key);
+        return;
+    }
+
+    size_t total_expected_len = 5 + tls_rec_len;
+    if (buf.len < total_expected_len) {
+        return; // Wait for full TLS record payload
+    }
+
+    if (tls_rec_len < 4 || buf.len < 9) {
+        ctx->active_flows.erase(key);
+        return;
+    }
+
+    // Process Complete Reassembled ClientHello (0x01) or ServerHello (0x02)
+    uint8_t handshake_type = buf.bytes[5];
+
     if (handshake_type == 0x01 || handshake_type == 0x02) {
-        // Save matched frame immediately to PCAP if -w was passed
+        uint32_t hs_len = (static_cast<uint32_t>(buf.bytes[6]) << 16) |
+                          (static_cast<uint32_t>(buf.bytes[7]) << 8)  |
+                           static_cast<uint32_t>(buf.bytes[8]);
+
+        // Validate handshake length against tls_rec_len
+        if (4 + hs_len > tls_rec_len) {
+            ctx->active_flows.erase(key);
+            return;
+        }
+
         if (ctx->dumper != nullptr) {
             pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
             pcap_dump_flush(ctx->dumper);
@@ -125,11 +210,14 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         std::cout << "[+] Captured " << (handshake_type == 0x01 ? "ClientHello" : "ServerHello")
                   << " | Flow: [" << src_ip << "]:" << src_port
                   << " -> [" << dst_ip << "]:" << dst_port
-                  << " | Payload Size: " << payload_len << " bytes\n";
+                  << " | Reassembled Size: " << buf.len << " bytes"
+                  << " | Handshake Payload: " << hs_len << " bytes\n";
 
-        // Zero-copy handoff to parser (activate when parser.cpp is ready)
-        // Zero-copy handoff using recycled scratchpads
-        if (handshake_type == 0x01) {
+        ctx->active_flows.erase(key);
+    } else {
+        ctx->active_flows.erase(key);
+    }
+    if (handshake_type == 0x01) {
             ctx->client_scratchpad.clear();
             if (parse_client_hello(payload, payload_len, ctx->client_scratchpad)) {
                 JA3Fingerprint ja3 = compute_ja3(ctx->client_scratchpad);
@@ -147,7 +235,6 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
                           << "  └─ [JA3S Hash]   " << ja3s.md5_hash << "\n";
             }
         }
-    }
 }
 
 bool start_capture(const CaptureOptions &opts) {
