@@ -104,6 +104,9 @@ def parse_client_hello(data: bytes) -> ClientHelloFields:
         
     cipher_suites_len = struct.unpack('!H', data[offset:offset+2])[0]
     offset += 2
+
+    if cipher_suites_len % 2 != 0:
+        raise ValueError("Invalid cipher suites length")
     
     if len(data) - offset < cipher_suites_len:
         raise ValueError("Truncated cipher suites")
@@ -119,7 +122,8 @@ def parse_client_hello(data: bytes) -> ClientHelloFields:
         
     comp_methods_len = data[offset]
     offset += 1 + comp_methods_len
-    
+    if offset > len(data):
+        raise ValueError("Truncated compression methods")
     extensions = []
     elliptic_curves = []
     ec_point_formats = []
@@ -135,9 +139,11 @@ def parse_client_hello(data: bytes) -> ClientHelloFields:
             
         ext_total_len = struct.unpack('!H', data[offset:offset+2])[0]
         offset += 2
-        
-        end_offset = min(offset + ext_total_len, len(data))
-            
+
+        if offset + ext_total_len > len(data):
+            raise ValueError("Truncated extensions data")
+
+        end_offset = offset + ext_total_len
         while offset + 4 <= end_offset:
             ext_type = struct.unpack('!H', data[offset:offset+2])[0]
             ext_len = struct.unpack('!H', data[offset+2:offset+4])[0]
@@ -175,11 +181,12 @@ def parse_client_hello(data: bytes) -> ClientHelloFields:
             elif ext_type == 0x0010: # ALPN (16)
                 if len(ext_data) >= 2:
                     alpn_len = struct.unpack('!H', ext_data[0:2])[0]
+                    end = min(len(ext_data), 2 + alpn_len)
                     p = 2
-                    while p < len(ext_data) and p < 2 + alpn_len:
+                    while p < end:
                         s_len = ext_data[p]
                         p += 1
-                        if p + s_len <= len(ext_data):
+                        if p + s_len <= end:
                             alpn_str = ext_data[p:p+s_len].decode('utf-8', errors='ignore')
                             alpn.append(alpn_str)
                         p += s_len

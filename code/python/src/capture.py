@@ -31,7 +31,6 @@ import socket
 from src.parser import (
     ClientHelloFields,
     ServerHelloFields,
-    parse_tls_record,
     parse_handshake_header,
     parse_client_hello,
     parse_server_hello,
@@ -305,6 +304,7 @@ class TCPReassembler:
                 # in the stream. Clear it to avoid infinite loops.
                 logger.debug("Non-TLS content type %d, clearing stream", content_type)
                 flow.stream.clear()
+                flow.pending_handshake = b''
                 break
 
             # Read the declared record length from header bytes [3:5]
