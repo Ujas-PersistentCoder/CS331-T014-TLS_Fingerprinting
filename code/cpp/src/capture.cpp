@@ -1,5 +1,6 @@
 #include "tlsfp/capture.hpp"
 #include "tlsfp/parser.hpp"
+#include "tlsfp/ja3.hpp"
 #include <iostream>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
@@ -127,17 +128,25 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
                   << " | Payload Size: " << payload_len << " bytes\n";
 
         // Zero-copy handoff to parser (activate when parser.cpp is ready)
-        // if (handshake_type == 0x01) {
-        //     ClientHelloData client_data;
-        //     if (parse_client_hello(payload, payload_len, client_data)) {
-        //         // Dissection output
-        //     }
-        // } else {
-        //     ServerHelloData server_data;
-        //     if (parse_server_hello(payload, payload_len, server_data)) {
-        //         // Dissection output
-        //     }
-        // }
+        // Zero-copy handoff using recycled scratchpads
+        if (handshake_type == 0x01) {
+            ctx->client_scratchpad.clear();
+            if (parse_client_hello(payload, payload_len, ctx->client_scratchpad)) {
+                JA3Fingerprint ja3 = compute_ja3(ctx->client_scratchpad);
+                
+                std::cout << "  ├─ [SNI] " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
+                          << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
+                          << "  └─ [JA3 Hash]   " << ja3.md5_hash << "\n";
+            }
+        } else if (handshake_type == 0x02) {
+            ctx->server_scratchpad.clear();
+            if (parse_server_hello(payload, payload_len, ctx->server_scratchpad)) {
+                JA3Fingerprint ja3s = compute_ja3s(ctx->server_scratchpad);
+
+                std::cout << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
+                          << "  └─ [JA3S Hash]   " << ja3s.md5_hash << "\n";
+            }
+        }
     }
 }
 

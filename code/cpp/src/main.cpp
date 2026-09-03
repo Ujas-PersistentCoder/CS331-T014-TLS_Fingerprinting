@@ -1,4 +1,4 @@
-#include "../include/tlsfp/capture.hpp"
+#include "tlsfp/capture.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <csignal>
@@ -50,6 +50,11 @@ int main(int argc, char *argv[]) {
     if (opts.interface_name.empty() && opts.read_filename.empty()) {
         std::cerr << "[-] Error: Must specify an interface (-i) or PCAP file (-r).\n";
         print_usage(argv[0]);
+        return 1;
+    }
+
+    if (!opts.interface_name.empty() && !opts.read_filename.empty()) {
+        std::cerr << "[-] Error: Cannot specify both -i (live) and -r (file) at the same time.\n";
         return 1;
     }
 
