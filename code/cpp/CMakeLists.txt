@@ -4,22 +4,8 @@ project(tlsfp CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Default to Release build (-O3) if no build type is specified
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
-endif()
-
-# Strict compiler warnings & aggressive optimization flags
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wconversion
-        -Wshadow
-        $<$<CONFIG:Release>:-O3 -march=native>
-        $<$<CONFIG:Debug>:-g -O0>
-    )
 endif()
 
 # Locate libpcap
@@ -29,10 +15,10 @@ if(NOT PCAP_LIBRARY OR NOT PCAP_INCLUDE_DIR)
     message(FATAL_ERROR "libpcap development files not found. Run: sudo apt install libpcap-dev")
 endif()
 
-# Locate OpenSSL (libcrypto for EVP MD5 and SHA-256)
+# Locate OpenSSL (libcrypto)
 find_package(OpenSSL REQUIRED)
 
-# Target executable definition
+# 1. Define the executable target FIRST
 add_executable(tlsfp_engine
     src/main.cpp
     src/capture.cpp
@@ -41,14 +27,29 @@ add_executable(tlsfp_engine
     src/ja4.cpp
 )
 
-# Target-specific include directories (No global directory leakage)
+# 2. Attach compiler options to the defined target
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(tlsfp_engine PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Release>:-march=native>
+        $<$<CONFIG:Debug>:-g>
+        $<$<CONFIG:Debug>:-O0>
+    )
+endif()
+
+# 3. Attach include search paths
 target_include_directories(tlsfp_engine PRIVATE
     include
     ${PCAP_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
 )
 
-# Target linkage
+# 4. Link external libraries
 target_link_libraries(tlsfp_engine PRIVATE
     ${PCAP_LIBRARY}
     OpenSSL::Crypto

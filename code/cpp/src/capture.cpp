@@ -19,112 +19,95 @@ void signal_handler(int signum) {
     }
 }
 
+void CaptureContext::cleanup_stale_flows(time_t current_time) {
+    constexpr time_t TIMEOUT_SECONDS = 30;
+    for (auto it = active_flows.begin(); it != active_flows.end();) {
+        if (current_time - it->second.last_seen > TIMEOUT_SECONDS) {
+            it = active_flows.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
     CaptureContext *ctx = reinterpret_cast<CaptureContext*>(user_data);
     if (!ctx) return;
 
-    // 1. Resolve Link-Layer Offset dynamically
+    // Periodic garbage collection sweep every 2048 packets
+    if ((++ctx->packet_counter & 0x7FF) == 0) {
+        ctx->cleanup_stale_flows(pkthdr->ts.tv_sec);
+    }
+
+    // 1. Resolve Link-Layer Offset
     size_t link_header_len = 0;
     switch (ctx->link_type) {
-        case DLT_EN10MB:      // Standard Ethernet / Wi-Fi (14 bytes)
-            link_header_len = 14;
-            break;
-        case DLT_LINUX_SLL2:  // Linux Cooked v2 (WSL / tcpdump -i any) (20 bytes)
-            link_header_len = 20;
-            break;
-        case DLT_LINUX_SLL:   // Linux Cooked v1 (16 bytes)
-            link_header_len = 16;
-            break;
-        case DLT_NULL:        // BSD / macOS Loopback (4 bytes)
-            link_header_len = 4;
-            break;
-        case DLT_RAW:         // Raw IP (VPN / tun interfaces) (0 bytes)
-            link_header_len = 0;
-            break;
-        default:
-            return; // Unsupported link-layer
+        case DLT_EN10MB:      link_header_len = 14; break;
+        case DLT_LINUX_SLL2:  link_header_len = 20; break;
+        case DLT_LINUX_SLL:   link_header_len = 16; break;
+        case DLT_NULL:        link_header_len = 4;  break;
+        case DLT_RAW:         link_header_len = 0;  break;
+        default:              return;
     }
 
-    // Ensure packet has at least 1 byte after link layer to check the IP version nibble
-    if (pkthdr->caplen < link_header_len + 1) {
-        return;
-    }
+    if (pkthdr->caplen < link_header_len + 1) return;
 
-    // 2. Determine IP Version (first 4 bits of the IP header)
+    // 2. IP Demuxing
     uint8_t ip_version = (packet[link_header_len] >> 4);
     size_t ip_header_len = 0;
     char src_ip[INET6_ADDRSTRLEN];
     char dst_ip[INET6_ADDRSTRLEN];
-
     FlowKey key{};
 
     if (ip_version == 4) {
-        // --- IPv4 Path ---
         if (pkthdr->caplen < link_header_len + sizeof(struct ip)) return;
         const struct ip *ip_hdr = reinterpret_cast<const struct ip *>(packet + link_header_len);
-
-        if (ip_hdr->ip_p != IPPROTO_TCP) return; // Verify TCP protocol
+        if (ip_hdr->ip_p != IPPROTO_TCP) return;
 
         ip_header_len = ip_hdr->ip_hl * 4;
-        if (ip_header_len < 20) return;
+        if (ip_header_len < 20 || pkthdr->caplen < link_header_len + ip_header_len) return;
 
         inet_ntop(AF_INET, &(ip_hdr->ip_src), src_ip, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &(ip_hdr->ip_dst), dst_ip, INET_ADDRSTRLEN);
 
-        // Store binary IP addresses directly (Zero Heap Allocation)
         key.ip_version = 4;
         key.src_ip.v4 = ip_hdr->ip_src;
         key.dst_ip.v4 = ip_hdr->ip_dst;
-
     } else if (ip_version == 6) {
-        // --- IPv6 Path ---
         if (pkthdr->caplen < link_header_len + sizeof(struct ip6_hdr)) return;
         const struct ip6_hdr *ip6_hdr = reinterpret_cast<const struct ip6_hdr *>(packet + link_header_len);
+        if (ip6_hdr->ip6_nxt != IPPROTO_TCP) return;
 
-        if (ip6_hdr->ip6_nxt != IPPROTO_TCP) return; // Verify TCP protocol
-
-        ip_header_len = sizeof(struct ip6_hdr); // Fixed 40 bytes for standard IPv6
-
+        ip_header_len = sizeof(struct ip6_hdr);
         inet_ntop(AF_INET6, &(ip6_hdr->ip6_src), src_ip, INET6_ADDRSTRLEN);
         inet_ntop(AF_INET6, &(ip6_hdr->ip6_dst), dst_ip, INET6_ADDRSTRLEN);
 
-        // Store binary IP addresses directly (Zero Heap Allocation)
         key.ip_version = 6;
         key.src_ip.v6 = ip6_hdr->ip6_src;
         key.dst_ip.v6 = ip6_hdr->ip6_dst;
-
     } else {
-        return; // Non-IP packet
-    }
-
-    // 3. Inspect TCP Header
-    if (pkthdr->caplen < link_header_len + ip_header_len + sizeof(struct tcphdr)) {
         return;
     }
 
+    // 3. TCP Inspection
+    if (pkthdr->caplen < link_header_len + ip_header_len + sizeof(struct tcphdr)) return;
     const struct tcphdr *tcp_hdr = reinterpret_cast<const struct tcphdr *>(packet + link_header_len + ip_header_len);
     size_t tcp_header_len = tcp_hdr->th_off * 4;
-    if (tcp_header_len < 20) {
-        return;
-    }
+    if (tcp_header_len < 20) return;
 
-    // Set 5-tuple ports
     key.src_port = tcp_hdr->th_sport;
     key.dst_port = tcp_hdr->th_dport;
 
-    // 4. Calculate Payload Offset & Length
+    // 4. Payload Bounds Check
     size_t header_total_len = link_header_len + ip_header_len + tcp_header_len;
-    if (pkthdr->caplen <= header_total_len) {
-        return; // Pure TCP ACK/SYN/FIN or header-only frame
-    }
+    if (pkthdr->caplen <= header_total_len) return;
 
     size_t payload_len = pkthdr->caplen - header_total_len;
     const uint8_t *payload = packet + header_total_len;
 
-    // 5. TCP Sequence Alignment and Deduplication
+    // 5. Sequence Reassembly
     StreamBuffer &buf = ctx->active_flows[key];
     buf.last_seen = pkthdr->ts.tv_sec;
-
     uint32_t seq = ntohl(tcp_hdr->th_seq);
 
     if (!buf.seq_initialized) {
@@ -132,14 +115,17 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         buf.seq_initialized = true;
     }
 
-    if (seq < buf.next_seq) {
-        // Handle duplicate bytes / retransmissions
-        uint32_t diff = buf.next_seq - seq;
-        if (diff >= payload_len) return; // Entirely duplicate, discard
-        payload += diff;
-        payload_len -= diff;
-    } else if (seq > buf.next_seq) {
-        // Gap detected due to out-of-order packet: clear flow state
+    // RFC 1982 Sequence Arithmetic (Handles 32-bit Wraparound)
+    int32_t seq_diff = static_cast<int32_t>(seq - buf.next_seq);
+
+    if (seq_diff < 0) {
+        // Retransmission / Overlap
+        uint32_t overlap = static_cast<uint32_t>(-seq_diff);
+        if (overlap >= payload_len) return; // Full duplicate
+        payload += overlap;
+        payload_len -= overlap;
+    } else if (seq_diff > 0) {
+        // Out-of-order segment gap: drop state and reset to avoid corrupting stream
         ctx->active_flows.erase(key);
         return;
     }
@@ -151,18 +137,14 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
 
     std::memcpy(buf.bytes + buf.len, payload, payload_len);
     buf.len += static_cast<uint16_t>(payload_len);
-    buf.next_seq += payload_len; // Advance expected sequence number
+    buf.next_seq += static_cast<uint32_t>(payload_len);
 
-    // 6. Inspect TLS Record Header
-    if (buf.len < 5) {
-        return; // Wait for full 5-byte TLS record header
-    }
+    // 6. TLS Validation
+    if (buf.len < 5) return; // Need at least the 5-byte TLS record header
 
     uint8_t record_type  = buf.bytes[0];
     uint8_t major_ver    = buf.bytes[1];
     uint8_t minor_ver    = buf.bytes[2];
-    
-    // Declared here so it remains in scope for validation below
     uint16_t tls_rec_len = (static_cast<uint16_t>(buf.bytes[3]) << 8) | buf.bytes[4];
 
     bool is_valid_tls = (record_type == 0x16) && 
@@ -175,66 +157,57 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         return;
     }
 
-    size_t total_expected_len = 5 + tls_rec_len;
-    if (buf.len < total_expected_len) {
-        return; // Wait for full TLS record payload
-    }
-
+    // Wait until full TLS record has assembled
+    if (buf.len < 5 + tls_rec_len) return;
     if (tls_rec_len < 4 || buf.len < 9) {
         ctx->active_flows.erase(key);
         return;
     }
 
-    // Process Complete Reassembled ClientHello (0x01) or ServerHello (0x02)
+    // 7. Parse Reassembled Handshake
     uint8_t handshake_type = buf.bytes[5];
+    uint16_t src_port = ntohs(tcp_hdr->th_sport);
+    uint16_t dst_port = ntohs(tcp_hdr->th_dport);
 
-    if (handshake_type == 0x01 || handshake_type == 0x02) {
-        uint32_t hs_len = (static_cast<uint32_t>(buf.bytes[6]) << 16) |
-                          (static_cast<uint32_t>(buf.bytes[7]) << 8)  |
-                           static_cast<uint32_t>(buf.bytes[8]);
-
-        // Validate handshake length against tls_rec_len
-        if (4 + hs_len > tls_rec_len) {
-            ctx->active_flows.erase(key);
-            return;
-        }
-
-        if (ctx->dumper != nullptr) {
-            pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
-            pcap_dump_flush(ctx->dumper);
-        }
-
-        uint16_t src_port = ntohs(tcp_hdr->th_sport);
-        uint16_t dst_port = ntohs(tcp_hdr->th_dport);
-
-        std::cout << "[+] Captured " << (handshake_type == 0x01 ? "ClientHello" : "ServerHello")
-                  << " | Flow: [" << src_ip << "]:" << src_port
-                  << " -> [" << dst_ip << "]:" << dst_port
-                  << " | Reassembled Size: " << buf.len << " bytes"
-                  << " | Handshake Payload: " << hs_len << " bytes\n";
-
-        ctx->active_flows.erase(key);
-    } else {
-        ctx->active_flows.erase(key);
-    }
     if (handshake_type == 0x01) {
-            ctx->client_scratchpad.clear();
-            if (parse_client_hello(payload, payload_len, ctx->client_scratchpad)) {
-                JA3Fingerprint ja3 = compute_ja3(ctx->client_scratchpad);
-                
-                std::cout << "  ├─ [SNI] " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
-                          << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
-                          << "  └─ [JA3 Hash]   " << ja3.md5_hash << "\n";
-            }
-        } else if (handshake_type == 0x02) {
-            ctx->server_scratchpad.clear();
-            if (parse_server_hello(payload, payload_len, ctx->server_scratchpad)) {
-                JA3Fingerprint ja3s = compute_ja3s(ctx->server_scratchpad);
+        ctx->client_scratchpad.clear();
+        // Fixed: Passing reassembled buffer (buf.bytes, buf.len)
+        if (parse_client_hello(buf.bytes, buf.len, ctx->client_scratchpad)) {
+            JA3Fingerprint ja3 = compute_ja3(ctx->client_scratchpad);
 
-                std::cout << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
-                          << "  └─ [JA3S Hash]   " << ja3s.md5_hash << "\n";
+            std::cout << "[+] Captured ClientHello | Flow: [" << src_ip << "]:" << src_port
+                      << " -> [" << dst_ip << "]:" << dst_port
+                      << " | Reassembled Size: " << buf.len << " bytes\n"
+                      << "  ├─ [SNI] " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
+                      << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
+                      << "  └─ [JA3 Hash]   " << ja3.md5_hash << "\n";
+
+            if (ctx->dumper) {
+                pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
+                pcap_dump_flush(ctx->dumper);
             }
         }
+    } else if (handshake_type == 0x02) {
+        ctx->server_scratchpad.clear();
+        // Fixed: Passing reassembled buffer (buf.bytes, buf.len)
+        if (parse_server_hello(buf.bytes, buf.len, ctx->server_scratchpad)) {
+            JA3Fingerprint ja3s = compute_ja3s(ctx->server_scratchpad);
+
+            std::cout << "[+] Captured ServerHello | Flow: [" << src_ip << "]:" << src_port
+                      << " -> [" << dst_ip << "]:" << dst_port
+                      << " | Reassembled Size: " << buf.len << " bytes\n"
+                      << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
+                      << "  └─ [JA3S Hash]   " << ja3s.md5_hash << "\n";
+
+            if (ctx->dumper) {
+                pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
+                pcap_dump_flush(ctx->dumper);
+            }
+        }
+    }
+
+    // Clean up flow state now that handshake has been processed
+    ctx->active_flows.erase(key);
 }
 
 bool start_capture(const CaptureOptions &opts) {
