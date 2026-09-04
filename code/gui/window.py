@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QFileDialog, QHeaderView, 
     QComboBox, QLabel, QTextEdit
 )
-from scapy.all import get_if_list
+from scapy.all import get_working_ifaces
 from workers import PcapWorker, LiveCaptureWorker
 
 class TlsMonitorGui(QMainWindow):
@@ -32,9 +32,10 @@ class TlsMonitorGui(QMainWindow):
         controlLayout.addWidget(QLabel("Interface:"))
         self.interfaceDropdown = QComboBox()
         try:
-            self.interfaceDropdown.addItems(get_if_list())
+            for iface in get_working_ifaces():
+                self.interfaceDropdown.addItem(iface.name, iface.network_name)
         except Exception:
-            self.interfaceDropdown.addItem("Default")
+            self.interfaceDropdown.addItem("Default", "Default")
         controlLayout.addWidget(self.interfaceDropdown)
 
         self.liveButton = QPushButton("Start Live Capture")
@@ -79,7 +80,7 @@ class TlsMonitorGui(QMainWindow):
             self.liveButton.setText("Start Live Capture")
             self.loadButton.setEnabled(True)
         else:
-            selectedInterface = self.interfaceDropdown.currentText()
+            selectedInterface = self.interfaceDropdown.currentData()
             self.dataTable.setRowCount(0)
             self.rowCache.clear()
             self.detailsPane.clear()
