@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <vector>
 #include <cctype>
+#include <arpa/inet.h>
+#include <cstring>
 
 namespace tlsfp {
 
@@ -22,19 +24,30 @@ static inline void append_hex4_joined(std::string &out, const std::vector<uint16
     }
 }
 
-std::string sha256_hex_12(std::string_view input) {
-    static thread_local EVP_MD_CTX *t_sha256_ctx = nullptr;
-    if (!t_sha256_ctx) {
-        t_sha256_ctx = EVP_MD_CTX_new();
-        if (!t_sha256_ctx) return "000000000000";
+// RAII Wrapper for thread-local OpenSSL SHA256 context
+struct ThreadLocalSha256Context {
+    EVP_MD_CTX *ctx{nullptr};
+    ThreadLocalSha256Context() : ctx(EVP_MD_CTX_new()) {}
+    ~ThreadLocalSha256Context() {
+        if (ctx) {
+            EVP_MD_CTX_free(ctx);
+            ctx = nullptr;
+        }
     }
+    ThreadLocalSha256Context(const ThreadLocalSha256Context&) = delete;
+    ThreadLocalSha256Context& operator=(const ThreadLocalSha256Context&) = delete;
+};
+
+std::string sha256_hex_12(std::string_view input) {
+    static thread_local ThreadLocalSha256Context tls_ctx;
+    if (!tls_ctx.ctx) return "000000000000";
 
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int digest_len = 0;
 
-    if (EVP_DigestInit_ex(t_sha256_ctx, EVP_sha256(), nullptr) != 1 ||
-        EVP_DigestUpdate(t_sha256_ctx, input.data(), input.size()) != 1 ||
-        EVP_DigestFinal_ex(t_sha256_ctx, digest, &digest_len) != 1) {
+    if (EVP_DigestInit_ex(tls_ctx.ctx, EVP_sha256(), nullptr) != 1 ||
+        EVP_DigestUpdate(tls_ctx.ctx, input.data(), input.size()) != 1 ||
+        EVP_DigestFinal_ex(tls_ctx.ctx, digest, &digest_len) != 1) {
         return "000000000000";
     }
 
@@ -42,23 +55,29 @@ std::string sha256_hex_12(std::string_view input) {
     std::string hex_str;
     hex_str.resize(12);
     for (size_t i = 0; i < 6; ++i) {
-        hex_str[i * 2]     = HEX_LUT[(digest[i] >> 4) & 0x0F];
+        hex_str[i * 2] = HEX_LUT[(digest[i] >> 4) & 0x0F];
         hex_str[i * 2 + 1] = HEX_LUT[digest[i] & 0x0F];
     }
     return hex_str;
 }
 
 static inline const char* resolve_ja4_version(const ClientHelloData &client) noexcept {
-    uint16_t highest_ver = 0;
     if (!client.supported_versions.empty()) {
+        // Priority scan for standard TLS versions
+        bool has_13 = false, has_12 = false, has_11 = false, has_10 = false;
         for (uint16_t v : client.supported_versions) {
-            if (v > highest_ver) highest_ver = v;
+            if (v == 0x0304) has_13 = true;
+            else if (v == 0x0303) has_12 = true;
+            else if (v == 0x0302) has_11 = true;
+            else if (v == 0x0301) has_10 = true;
         }
-    } else {
-        highest_ver = client.client_version;
+        if (has_13) return "13";
+        if (has_12) return "12";
+        if (has_11) return "11";
+        if (has_10) return "10";
     }
 
-    switch (highest_ver) {
+    switch (client.client_version) {
         case 0x0304: return "13"; // TLS 1.3
         case 0x0303: return "12"; // TLS 1.2
         case 0x0302: return "11"; // TLS 1.1
@@ -76,10 +95,28 @@ static inline void resolve_ja4_alpn(std::string_view alpn, char &first, char &la
         last  = '0';
         return;
     }
-    char f = alpn.front();
-    char l = alpn.back();
-    first = std::isalnum(static_cast<unsigned char>(f)) ? f : '0';
-    last  = std::isalnum(static_cast<unsigned char>(l)) ? l : '0';
+    unsigned char f = static_cast<unsigned char>(alpn.front());
+    unsigned char l = static_cast<unsigned char>(alpn.back());
+    
+    // Lowercase alphanumeric validation per JA4 specification
+    first = std::isalnum(f) ? static_cast<char>(std::tolower(f)) : '0';
+    last  = std::isalnum(l) ? static_cast<char>(std::tolower(l)) : '0';
+}
+
+static inline bool is_literal_ip(std::string_view host) noexcept {
+    if (host.empty()) return false;
+    char buf[64];
+    if (host.size() >= sizeof(buf)) return false;
+    std::memcpy(buf, host.data(), host.size());
+    buf[host.size()] = '\0';
+
+    struct in_addr addr4;
+    if (inet_pton(AF_INET, buf, &addr4) == 1) return true;
+
+    struct in6_addr addr6;
+    if (inet_pton(AF_INET6, buf, &addr6) == 1) return true;
+
+    return false;
 }
 
 JA4Fingerprint compute_ja4(const ClientHelloData &client) {
@@ -89,8 +126,11 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
     fp.ja4_a.reserve(10);
     fp.ja4_a.push_back('t'); // Protocol: TCP
     fp.ja4_a.append(resolve_ja4_version(client)); // TLS Version
-    fp.ja4_a.push_back(client.has_sni ? 'd' : 'i'); // SNI status
-
+    if (client.has_sni && !is_literal_ip(client.sni)) {
+        fp.ja4_a.push_back('d');
+    } else {
+        fp.ja4_a.push_back('i');
+    }
     // Number of Ciphers (excluding GREASE, saturated at 99)
     size_t ciphers_count = std::min<size_t>(client.cipher_suites.size(), 99);
     fp.ja4_a.push_back(static_cast<char>('0' + (ciphers_count / 10)));
@@ -215,4 +255,4 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
     return fp;
 }
 
-} // namespace tlsfp
+}

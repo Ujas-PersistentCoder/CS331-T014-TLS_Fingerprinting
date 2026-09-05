@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <string_view>
 
 namespace tlsfp {
 
@@ -59,6 +60,6 @@ struct ServerHelloData {
 bool parse_client_hello(const uint8_t *payload, size_t len, ClientHelloData &out);
 bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out);
 
-} // namespace tlsfp
+}
 
-#endif // TLSFP_PARSER_HPP
+#endif

@@ -8,19 +8,19 @@
 namespace fs = std::filesystem;
 
 static void print_usage(const char *prog_name) {
-    std::cerr << "Usage: " << prog_name << " [OPTIONS]\n"
+    std::cerr << "Usage: " << prog_name << " [OPTIONS]\n\n"
               << "Options:\n"
-              << "  -i <interface>   Live network interface (e.g., eth0, any)\n"
+              << "  -i <interface>   Live network interface (e.g., eth0, wlan0, any)\n"
               << "  -r <pcap_file>   Read packets from offline PCAP file\n"
               << "  -w <pcap_file>   Save matched TLS handshakes to output PCAP\n"
-              << "  -h               Show this help message\n";
+              << "  -f <bpf_filter>  Custom BPF filter expression (default: 'tcp')\n"
+              << "  -h               Show this help message\n\n"
+              << "Examples:\n"
+              << "  Live Capture:    " << prog_name << " -i eth0 -f \"tcp port 443\"\n"
+              << "  Offline Trace:   " << prog_name << " -r captures/test.pcap\n";
 }
 
 int main(int argc, char *argv[]) {
-    // Decouple C++ streams from C stdio to eliminate I/O lock contention
-    std::ios_base::sync_with_stdio(false);
-    std::cin.tie(nullptr);
-    std::cout << std::unitbuf;
 
     if (argc < 2) {
         print_usage(argv[0]);
@@ -30,11 +30,12 @@ int main(int argc, char *argv[]) {
     tlsfp::CaptureOptions opts;
     int opt;
 
-    while ((opt = getopt(argc, argv, "i:r:w:h")) != -1) {
+    while ((opt = getopt(argc, argv, "i:r:w:f:h")) != -1) {
         switch (opt) {
             case 'i': opts.interface_name = optarg; break;
-            case 'r': opts.read_filename = optarg; break;
+            case 'r': opts.read_filename  = optarg; break;
             case 'w': opts.write_filename = optarg; break;
+            case 'f': opts.bpf_filter     = optarg; break;
             case 'h': print_usage(argv[0]); return 0;
             default:  print_usage(argv[0]); return 1;
         }
@@ -56,6 +57,7 @@ int main(int argc, char *argv[]) {
 
     if (!opts.interface_name.empty() && !opts.read_filename.empty()) {
         std::cerr << "[-] Error: Cannot specify both -i (live) and -r (file) at the same time.\n";
+        print_usage(argv[0]);
         return 1;
     }
 

@@ -5,13 +5,14 @@
 
 namespace tlsfp {
 
+// Lightweight byte reader with bounds checking
 struct ByteReader {
     const uint8_t *data;
     size_t len;
     size_t offset{0};
 
     inline bool has_bytes(size_t n) const noexcept {
-        return (offset + n <= len);
+        return (n <= len && offset <= len - n);
     }
 
     inline uint8_t read_u8() noexcept {
@@ -39,6 +40,15 @@ struct ByteReader {
     }
 };
 
+// Evaluates if a 2-byte ALPN string is an RFC 8701 GREASE value
+inline bool is_alpn_grease(std::string_view alpn) noexcept {
+    if (alpn.size() != 2) return false;
+    uint8_t b1 = static_cast<uint8_t>(alpn[0]);
+    uint8_t b2 = static_cast<uint8_t>(alpn[1]);
+    return (b1 == b2) && ((b1 & 0x0F) == 0x0A);
+}
+
+// Parse the extensions vector from a ClientHello message
 static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloData &out) {
     const size_t end_offset = reader.offset + exts_len;
 
@@ -46,12 +56,12 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
         uint16_t ext_type = reader.read_u16();
         uint16_t ext_len = reader.read_u16();
 
-        // Ground 1 & 2: Prevent extension length from overrunning the extension block
+        // Prevent extension length from overrunning the extension block
         if (reader.offset + ext_len > end_offset) {
             break;
         }
 
-        // 1. Filter GREASE extension types (RFC 8701)
+        // Filter GREASE extension types (RFC 8701)
         if (!is_grease(ext_type)) {
             out.extensions.push_back(ext_type);
         }
@@ -70,7 +80,7 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                         // 0 = host_name per RFC 6066
                         if (name_type == 0 && name_len <= list_len - 3 && sni_reader.has_bytes(name_len)) {
                             out.has_sni = true;
-                            // Ground 3: Zero-copy std::string_view eliminates heap allocation
+                            // Zerocopy std::string_view eliminates heap allocation
                             out.sni = std::string_view(reinterpret_cast<const char*>(sni_reader.data + sni_reader.offset), name_len);
                         }
                     }
@@ -83,7 +93,7 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                 if (ext_len >= 2) {
                     ByteReader ec_reader{reader.data, ext_start + ext_len, ext_start};
                     uint16_t curves_len = ec_reader.read_u16();
-                    // Ground 2: Enforce even-byte alignment and bounds check
+                    // Enforce even-byte alignment and bounds check
                     size_t valid_curves_len = std::min<size_t>(curves_len, ext_len - 2);
                     size_t ec_end = ec_reader.offset + (valid_curves_len & ~1ULL);
 
@@ -133,10 +143,23 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                 if (ext_len >= 2) {
                     ByteReader alpn_reader{reader.data, ext_start + ext_len, ext_start};
                     uint16_t list_len = alpn_reader.read_u16();
-                    if (list_len + 2 <= ext_len && alpn_reader.has_bytes(1)) {
-                        uint8_t proto_len = alpn_reader.read_u8();
-                        if (proto_len > 0 && alpn_reader.has_bytes(proto_len)) {
-                            out.first_alpn = std::string_view(reinterpret_cast<const char*>(alpn_reader.data + alpn_reader.offset), proto_len);
+                    if (list_len + 2 <= ext_len) {
+                        const size_t list_end = alpn_reader.offset + list_len;
+                        while (alpn_reader.offset < list_end && alpn_reader.has_bytes(1)) {
+                            uint8_t proto_len = alpn_reader.read_u8();
+                            if (proto_len == 0 || !alpn_reader.has_bytes(proto_len)) break;
+
+                            std::string_view cand(
+                                reinterpret_cast<const char*>(alpn_reader.data + alpn_reader.offset), 
+                                proto_len
+                            );
+                            alpn_reader.skip(proto_len);
+
+                            // Skip GREASE ALPN values to prevent JA4 fingerprint drift
+                            if (!is_alpn_grease(cand)) {
+                                out.first_alpn = cand;
+                                break;
+                            }
                         }
                     }
                 }
@@ -172,7 +195,7 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
 bool parse_client_hello(const uint8_t *payload, size_t len, ClientHelloData &out) {
     ByteReader reader{payload, len, 0};
 
-    // 1. Record Header (5 bytes)
+    // Record Header (5 bytes)
     if (!reader.has_bytes(5)) return false;
     if (reader.read_u8() != 0x16) return false; // Handshake record type
 
@@ -180,29 +203,29 @@ bool parse_client_hello(const uint8_t *payload, size_t len, ClientHelloData &out
     uint16_t record_len = reader.read_u16();
     if (!reader.has_bytes(record_len)) return false;
 
-    // 2. Handshake Header (4 bytes)
+    // Handshake Header (4 bytes)
     if (!reader.has_bytes(4)) return false;
     if (reader.read_u8() != 0x01) return false; // ClientHello handshake type
 
     uint32_t handshake_len = reader.read_u24();
-    // Ground 1: Validate handshake framing against record boundary
+    // Validate handshake framing against record boundary
     if (handshake_len + 4 > record_len || !reader.has_bytes(handshake_len)) {
         return false;
     }
-
-    // 3. Client Version
+    reader.len = reader.offset + handshake_len;
+    // Client Version
     if (!reader.has_bytes(2)) return false;
     out.client_version = reader.read_u16();
 
-    // 4. Skip Client Random (32 bytes)
+    // Skip Client Random (32 bytes)
     if (!reader.skip(32)) return false;
 
-    // 5. Skip Session ID
+    // Skip Session ID
     if (!reader.has_bytes(1)) return false;
     uint8_t session_id_len = reader.read_u8();
     if (!reader.skip(session_id_len)) return false;
 
-    // 6. Cipher Suites (with GREASE filtering)
+    // Cipher Suites (with GREASE filtering)
     if (!reader.has_bytes(2)) return false;
     uint16_t cipher_suites_len = reader.read_u16();
     if (!reader.has_bytes(cipher_suites_len) || (cipher_suites_len % 2 != 0)) return false;
@@ -215,17 +238,18 @@ bool parse_client_hello(const uint8_t *payload, size_t len, ClientHelloData &out
         }
     }
 
-    // 7. Compression Methods
+    // Compression Methods
     if (!reader.has_bytes(1)) return false;
     uint8_t compression_len = reader.read_u8();
     if (!reader.skip(compression_len)) return false;
 
-    // 8. Extensions Vector
+    // Extensions Vector
     if (reader.has_bytes(2)) {
         uint16_t extensions_len = reader.read_u16();
-        if (reader.has_bytes(extensions_len)) {
-            parse_extensions(reader, extensions_len, out);
+        if (!reader.has_bytes(extensions_len)) {
+            return false; // Truncated extensions must fail parsing
         }
+        parse_extensions(reader, extensions_len, out);
     }
 
     return true;
@@ -234,7 +258,7 @@ bool parse_client_hello(const uint8_t *payload, size_t len, ClientHelloData &out
 bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out) {
     ByteReader reader{payload, len, 0};
 
-    // 1. Record Header
+    // Record Header
     if (!reader.has_bytes(5)) return false;
     if (reader.read_u8() != 0x16) return false;
 
@@ -242,7 +266,7 @@ bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out
     uint16_t record_len = reader.read_u16();
     if (!reader.has_bytes(record_len)) return false;
 
-    // 2. Handshake Header
+    // Handshake Header
     if (!reader.has_bytes(4)) return false;
     if (reader.read_u8() != 0x02) return false; // ServerHello handshake type
 
@@ -250,33 +274,35 @@ bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out
     if (handshake_len + 4 > record_len || !reader.has_bytes(handshake_len)) {
         return false;
     }
-
-    // 3. Server Version (Default for TLS 1.2 and earlier)
+    reader.len = reader.offset + handshake_len;
+    // Server Version (Default for TLS 1.2 and earlier)
     if (!reader.has_bytes(2)) return false;
     out.server_version = reader.read_u16();
     out.selected_version = out.server_version; // Ground 1: Safe fallback initialization
 
-    // 4. Skip Server Random (32 bytes)
+    // Skip Server Random (32 bytes)
     if (!reader.skip(32)) return false;
 
-    // 5. Skip Session ID
+    // Skip Session ID
     if (!reader.has_bytes(1)) return false;
     uint8_t session_id_len = reader.read_u8();
     if (!reader.skip(session_id_len)) return false;
 
-    // 6. Selected Cipher Suite
+    // Selected Cipher Suite
     if (!reader.has_bytes(2)) return false;
     out.selected_cipher = reader.read_u16();
 
-    // 7. Skip Compression Method (1 byte)
+    // Skip Compression Method (1 byte)
     if (!reader.skip(1)) return false;
 
-    // 8. Extensions Vector
+    // Extensions Vector
     if (reader.has_bytes(2)) {
         uint16_t exts_len = reader.read_u16();
+        if (!reader.has_bytes(exts_len)) {
+            return false; // Bound validation against buffer over-read
+        }
         const size_t end_offset = reader.offset + exts_len;
 
-        // Ground 1 & 2: Restrict bounds strictly to exts_len
         while (reader.offset + 4 <= end_offset && reader.has_bytes(4)) {
             uint16_t ext_type = reader.read_u16();
             uint16_t ext_len = reader.read_u16();
@@ -289,6 +315,8 @@ bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out
                 out.extensions.push_back(ext_type);
             }
 
+            const size_t ext_start = reader.offset;
+
             // Extension 0x002b: Supported Versions (TLS 1.3 negotiated version)
             if (ext_type == 0x002b && ext_len == 2 && reader.has_bytes(2)) {
                 uint16_t ver = (static_cast<uint16_t>(reader.data[reader.offset]) << 8) |
@@ -299,7 +327,7 @@ bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out
             }
 
             if (ext_type == 0x0010 && ext_len >= 2) {
-                ByteReader alpn_reader{reader.data, reader.offset + ext_len, reader.offset};
+                ByteReader alpn_reader{reader.data, ext_start + ext_len, ext_start};
                 uint16_t list_len = alpn_reader.read_u16();
                 if (list_len + 2 <= ext_len && alpn_reader.has_bytes(1)) {
                     uint8_t proto_len = alpn_reader.read_u8();
@@ -312,7 +340,7 @@ bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out
                 }
             }
 
-            reader.skip(ext_len);
+            reader.offset = ext_start + ext_len;
         }
     }
 

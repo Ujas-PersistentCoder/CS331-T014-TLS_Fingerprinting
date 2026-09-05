@@ -1,10 +1,11 @@
 #include "tlsfp/ja3.hpp"
 #include <openssl/evp.h>
 #include <charconv>
+#include <string_view>
 
 namespace tlsfp {
 
-// Ground 3: Zero-allocation integer formatting via C++17 std::to_chars
+// Zero-allocation integer formatting via C++17 std::to_chars
 template <typename T>
 static inline void append_joined(std::string &out, const std::vector<T> &vec, char delimiter = '-') {
     char num_buf[16];
@@ -17,24 +18,38 @@ static inline void append_joined(std::string &out, const std::vector<T> &vec, ch
     }
 }
 
-std::string md5_hex(const std::string &input) {
-    // Ground 3: Reusable thread-local context avoids heap allocation per packet
-    static thread_local EVP_MD_CTX *t_md5_ctx = nullptr;
-    if (!t_md5_ctx) {
-        t_md5_ctx = EVP_MD_CTX_new();
-        if (!t_md5_ctx) return "";
+struct ThreadLocalEvpContext {
+    EVP_MD_CTX *ctx{nullptr};
+
+    ThreadLocalEvpContext() : ctx(EVP_MD_CTX_new()) {}
+
+    ~ThreadLocalEvpContext() {
+        if (ctx) {
+            EVP_MD_CTX_free(ctx);
+            ctx = nullptr;
+        }
     }
+
+    // Non-copyable, non-movable
+    ThreadLocalEvpContext(const ThreadLocalEvpContext&) = delete;
+    ThreadLocalEvpContext& operator=(const ThreadLocalEvpContext&) = delete;
+};
+
+std::string md5_hex(const std::string &input) {
+    // Reusable thread-local context avoids heap allocation per packet
+    static thread_local ThreadLocalEvpContext tls_ctx;
+    if (!tls_ctx.ctx) return "";
 
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int digest_len = 0;
 
-    if (EVP_DigestInit_ex(t_md5_ctx, EVP_md5(), nullptr) != 1 ||
-        EVP_DigestUpdate(t_md5_ctx, input.data(), input.size()) != 1 ||
-        EVP_DigestFinal_ex(t_md5_ctx, digest, &digest_len) != 1) {
+    if (EVP_DigestInit_ex(tls_ctx.ctx, EVP_md5(), nullptr) != 1 ||
+        EVP_DigestUpdate(tls_ctx.ctx, input.data(), input.size()) != 1 ||
+        EVP_DigestFinal_ex(tls_ctx.ctx, digest, &digest_len) != 1) {
         return "";
     }
 
-    // Ground 3: Direct 16-byte nibble LUT conversion (Replaces std::ostringstream)
+    // Direct 16-byte nibble LUT conversion (Replaces std::ostringstream)
     static constexpr char HEX_LUT[] = "0123456789abcdef";
     std::string hex_str;
     hex_str.resize(32);
@@ -50,7 +65,7 @@ std::string md5_hex(const std::string &input) {
 JA3Fingerprint compute_ja3(const ClientHelloData &client) {
     JA3Fingerprint fp;
     
-    // Ground 2: Pre-allocate 512 bytes to cover modern post-quantum ClientHellos
+    // Pre-allocate 512 bytes to cover modern post-quantum ClientHellos
     fp.raw_string.reserve(512);
 
     // 1. SSLVersion (using stack buffer)
@@ -102,4 +117,4 @@ JA3Fingerprint compute_ja3s(const ServerHelloData &server) {
     return fp;
 }
 
-} // namespace tlsfp
+}

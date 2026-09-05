@@ -3,6 +3,7 @@
 
 #include "tlsfp/parser.hpp"
 #include <string>
+#include <string_view>
 
 namespace tlsfp {
 
@@ -20,6 +21,6 @@ JA3Fingerprint compute_ja3s(const ServerHelloData &server);
 // Utility: Compute lowercase 32-char hex MD5 using OpenSSL EVP
 std::string md5_hex(const std::string &input);
 
-} // namespace tlsfp
+}
 
-#endif // TLSFP_JA3_HPP
+#endif
