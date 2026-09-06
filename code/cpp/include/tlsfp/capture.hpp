@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <netinet/in.h>
+#include <chrono>
 
 namespace tlsfp {
 
@@ -18,6 +19,8 @@ struct CaptureOptions {
     std::string read_filename; //stores path to pcap file for offline analysis
     std::string write_filename; //stores path to pcap file for writing captured packets
     std::string bpf_filter{"tcp"};
+    bool quiet{false};
+    bool verbose{false};
     RedisConfig redis_config;
     std::string seed_filename{"code/db/seed_fingerprints.json"};
     std::string manifest_filename{"code/db/capture_manifest.json"};
@@ -80,7 +83,12 @@ struct CaptureContext {
     pcap_dumper_t *dumper{nullptr};
     int link_type{0};
     std::unordered_map<FlowKey, StreamBuffer, FlowHash> active_flows;
-
+    bool quiet{false};
+    bool verbose{false};
+    size_t total_packets{0};
+    size_t client_hellos{0};
+    size_t server_hellos{0};
+    std::chrono::steady_clock::time_point start_time;
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
     std::unique_ptr<FingerprintDatabase> database;

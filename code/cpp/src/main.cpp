@@ -9,16 +9,19 @@ namespace fs = std::filesystem;
 
 static void print_usage(const char *prog_name) {
     std::cerr << "Usage: " << prog_name << " [OPTIONS]\n\n"
-              << "Options:\n"
-              << "  -i <interface>   Live network interface (e.g., eth0, wlan0, any)\n"
+              << "Capture Options:\n"
+              << "  -i <interface>   Live network interface (e.g., any, eth0)\n"
               << "  -r <pcap_file>   Read packets from offline PCAP file\n"
               << "  -w <pcap_file>   Save matched TLS handshakes to output PCAP\n"
-              << "  -f <bpf_filter>  Custom BPF filter expression (default: 'tcp')\n"
-              << "  -a               Prompt to label unknown fingerprints\n"
+              << "  -f <bpf_filter>  Custom BPF filter expression (default: 'tcp')\n\n"
+              << "Output Mode Options:\n"
+              << "  -q               Quiet mode: suppress all per-packet I/O, output benchmark summary\n"
+              << "  -v               Verbose mode: print detailed dissection, framing, and pre-hash strings\n"
               << "  -h               Show this help message\n\n"
               << "Examples:\n"
-              << "  Live Capture:    " << prog_name << " -i eth0 -f \"tcp port 443\"\n"
-              << "  Offline Trace:   " << prog_name << " -r captures/test.pcap\n";
+              << "  Benchmark:       " << prog_name << " -r trace.pcap -q\n"
+              << "  Deep Debug:      " << prog_name << " -r trace.pcap -v\n"
+              << "  Live Capture:    " << prog_name << " -i any -f \"tcp port 443\"\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -31,13 +34,14 @@ int main(int argc, char *argv[]) {
     tlsfp::CaptureOptions opts;
     int opt;
 
-    while ((opt = getopt(argc, argv, "i:r:w:f:ah")) != -1) {
+    while ((opt = getopt(argc, argv, "i:r:w:f:qvh")) != -1) {
         switch (opt) {
             case 'i': opts.interface_name = optarg; break;
             case 'r': opts.read_filename  = optarg; break;
             case 'w': opts.write_filename = optarg; break;
             case 'f': opts.bpf_filter     = optarg; break;
-            case 'a': opts.prompt_unknown = true; break;
+            case 'q': opts.quiet          = true;   break;
+            case 'v': opts.verbose        = true;   break;
             case 'h': print_usage(argv[0]); return 0;
             default:  print_usage(argv[0]); return 1;
         }

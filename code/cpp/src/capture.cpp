@@ -12,6 +12,9 @@
 #include <filesystem>
 #include <unistd.h>
 #include <initializer_list>
+#include <chrono>
+#include <cstring>
+#include <cstdio>
 
 namespace tlsfp {
 
@@ -48,6 +51,58 @@ std::string lookup_label(CaptureContext &ctx, FingerprintKind kind,
     return record.name + " (" + record.category + ")";
 }
 
+// Helper: Print 16-bit integer in hex
+inline std::string to_hex(uint16_t val) {
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "0x%04x", val);
+    return std::string(buf);
+}
+
+void print_verbose_client(const ClientHelloData &ch, const JA3Fingerprint &ja3, const JA4Fingerprint &ja4) {
+    std::cout << "   │  [V-Version]     " << to_hex(ch.client_version) << "\n"
+              << "   │  [V-SNI]         " << (ch.has_sni ? ch.sni : "<none>") << "\n"
+              << "   │  [V-ALPN]        " << (ch.first_alpn.empty() ? "<none>" : ch.first_alpn) << "\n"
+              << "   │  [V-Ciphers]     Count: " << ch.cipher_suites.size() << " [";
+    for (size_t i = 0; i < ch.cipher_suites.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << to_hex(ch.cipher_suites[i]);
+    }
+    std::cout << "]\n   │  [V-Extensions]  Count: " << ch.extensions.size() << " [";
+    for (size_t i = 0; i < ch.extensions.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << to_hex(ch.extensions[i]);
+    }
+    std::cout << "]\n   │  [V-Curves]      Count: " << ch.supported_groups.size() << " [";
+    for (size_t i = 0; i < ch.supported_groups.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << to_hex(ch.supported_groups[i]);
+    }
+    std::cout << "]\n   │  [V-SigAlgs]     Count: " << ch.signature_algorithms.size() << " [";
+    for (size_t i = 0; i < ch.signature_algorithms.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << to_hex(ch.signature_algorithms[i]);
+    }
+    std::cout << "]\n"
+              << "   │  [V-PreHash-JA3] " << ja3.raw_string << "\n"
+              << "   │  [V-PreHash-JA4b]" << ja4.raw_ja4_b << "\n"
+              << "   │  [V-PreHash-JA4c]" << ja4.raw_ja4_c << "\n";
+}
+
+void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s, const JA4Fingerprint &ja4s) {
+    std::cout << "   │  [V-WireVersion] " << to_hex(sh.server_version) << "\n"
+              << "   │  [V-Negotiated]  " << to_hex(sh.selected_version) << "\n"
+              << "   │  [V-Cipher]      " << to_hex(sh.selected_cipher) << "\n"
+              << "   │  [V-ALPN]        " << (sh.first_alpn.empty() ? "<none>" : sh.first_alpn) << "\n"
+              << "   │  [V-Extensions]  Count: " << sh.extensions.size() << " [";
+    for (size_t i = 0; i < sh.extensions.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << to_hex(sh.extensions[i]);
+    }
+    std::cout << "]\n"
+              << "   │  [V-PreHash-JA3S]" << ja3s.raw_string << "\n"
+              << "   │  [V-PreHash-JA4S]" << ja4s.raw_ja4_c << "\n";
+}
+
 } // namespace
 
 // Atomic handle for async-signal-safe termination
@@ -81,6 +136,8 @@ void CaptureContext::cleanup_stale_flows(time_t current_time) {
 void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const u_char *packet) {
     CaptureContext *ctx = reinterpret_cast<CaptureContext*>(user_data);
     if (!ctx) return;
+
+    ctx->total_packets++;
 
     // Periodic garbage collection sweep every 2048 packets
     if ((++ctx->packet_counter & 0x7FF) == 0) {
@@ -312,20 +369,30 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
     if (handshake_type == 0x01) {
         ctx->client_scratchpad.clear();
         if (parse_client_hello(buf.bytes, total_record_len, ctx->client_scratchpad)) {
+            ctx->client_hellos++; // Always track count for benchmark metrics
             JA3Fingerprint ja3 = compute_ja3(ctx->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx->client_scratchpad);
-            const std::string ja3_match = lookup_label(*ctx, FingerprintKind::JA3, ja3.md5_hash);
-            const std::string ja4_match = lookup_label(*ctx, FingerprintKind::JA4, ja4.full_fp);
 
-            std::cout << "[+] Captured ClientHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
-                      << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
-                      << " | Reassembled Size: " << total_record_len << " bytes\n"
-                      << "  ├─ [SNI]        " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
-                      << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
-                      << "  ├─ [JA3 Hash]   " << ja3.md5_hash << "\n"
-                      << "  ├─ [JA3 Match]  " << ja3_match << "\n"
-                      << "  ├─ [JA4]        " << ja4.full_fp << "\n"
-                      << "  └─ [JA4 Match]  " << ja4_match << "\n";
+            // In quiet mode (-q), completely bypass terminal prints & Redis network lookups
+            if (!ctx->quiet) {
+                const std::string ja3_match = lookup_label(*ctx, FingerprintKind::JA3, ja3.md5_hash);
+                const std::string ja4_match = lookup_label(*ctx, FingerprintKind::JA4, ja4.full_fp);
+
+                std::cout << "[+] Captured ClientHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
+                          << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
+                          << " | Reassembled Size: " << total_record_len << " bytes\n";
+
+                if (ctx->verbose) {
+                    print_verbose_client(ctx->client_scratchpad, ja3, ja4);
+                }
+
+                std::cout << "  ├─ [SNI]        " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
+                          << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
+                          << "  ├─ [JA3 Hash]   " << ja3.md5_hash << "\n"
+                          << "  ├─ [JA3 Match]  " << ja3_match << "\n"
+                          << "  ├─ [JA4]        " << ja4.full_fp << "\n"
+                          << "  └─ [JA4 Match]  " << ja4_match << "\n";
+            }
 
             if (ctx->dumper) {
                 pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
@@ -334,19 +401,29 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
     } else if (handshake_type == 0x02) {
         ctx->server_scratchpad.clear();
         if (parse_server_hello(buf.bytes, total_record_len, ctx->server_scratchpad)) {
+            ctx->server_hellos++; // Always track count for benchmark metrics
             JA3Fingerprint ja3s = compute_ja3s(ctx->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(ctx->server_scratchpad);
-            const std::string ja3s_match = lookup_label(*ctx, FingerprintKind::JA3S, ja3s.md5_hash);
-            const std::string ja4s_match = lookup_label(*ctx, FingerprintKind::JA4S, ja4s.full_fp);
 
-            std::cout << "[+] Captured ServerHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
-                      << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
-                      << " | Reassembled Size: " << total_record_len << " bytes\n"
-                      << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
-                      << "  ├─ [JA3S Hash]   " << ja3s.md5_hash << "\n"
-                      << "  ├─ [JA3S Match]  " << ja3s_match << "\n"
-                      << "  ├─ [JA4S]        " << ja4s.full_fp << "\n"
-                      << "  └─ [JA4S Match]  " << ja4s_match << "\n";
+            // In quiet mode (-q), completely bypass terminal prints & Redis network lookups
+            if (!ctx->quiet) {
+                const std::string ja3s_match = lookup_label(*ctx, FingerprintKind::JA3S, ja3s.md5_hash);
+                const std::string ja4s_match = lookup_label(*ctx, FingerprintKind::JA4S, ja4s.full_fp);
+
+                std::cout << "[+] Captured ServerHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
+                          << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
+                          << " | Reassembled Size: " << total_record_len << " bytes\n";
+
+                if (ctx->verbose) {
+                    print_verbose_server(ctx->server_scratchpad, ja3s, ja4s);
+                }
+
+                std::cout << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
+                          << "  ├─ [JA3S Hash]   " << ja3s.md5_hash << "\n"
+                          << "  ├─ [JA3S Match]  " << ja3s_match << "\n"
+                          << "  ├─ [JA4S]        " << ja4s.full_fp << "\n"
+                          << "  └─ [JA4S Match]  " << ja4s_match << "\n";
+            }
 
             if (ctx->dumper) {
                 pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
@@ -400,25 +477,30 @@ bool start_capture(const CaptureOptions &opts) {
     CaptureContext ctx;
     ctx.link_type = pcap_datalink(handle);
     ctx.prompt_unknown = opts.prompt_unknown;
-    std::cout << "[*] Capture initialized. Datalink type: " << ctx.link_type << "\n";
+    ctx.quiet = opts.quiet;
+    ctx.verbose = opts.verbose;
+    if (!opts.quiet) {
+        std::cout << "[*] Capture initialized. Datalink type: " << ctx.link_type << "\n";
 
-    ctx.database = std::make_unique<FingerprintDatabase>(opts.redis_config);
-    if (!ctx.database->connect()) {
-        std::cerr << "[-] Warning: Redis database unavailable; fingerprints will be reported as unknown.\n";
-    } else {
-        const std::string seed_path = resolve_data_file(
-            opts.seed_filename, {"../db/seed_fingerprints.json", "../../db/seed_fingerprints.json"});
-        const std::string manifest_path = resolve_data_file(
-            opts.manifest_filename, {"../db/capture_manifest.json", "../../db/capture_manifest.json"});
-        const std::string legacy_path = resolve_data_file(
-            "code/python/fingerprints.json", {"../python/fingerprints.json", "../../python/fingerprints.json"});
-        const std::size_t loaded = ctx.database->load_seed_files(seed_path, manifest_path) +
-            ctx.database->load_legacy_ja3_file(legacy_path);
-        if (loaded == 0) {
-            std::cerr << "[-] Warning: No fingerprint seed entries loaded from " << seed_path << ".\n";
+        // Connect to Redis and load seeds ONLY in interactive/standard mode
+        ctx.database = std::make_unique<FingerprintDatabase>(opts.redis_config);
+        if (!ctx.database->connect()) {
+            std::cerr << "[-] Warning: Redis database unavailable; fingerprints will be reported as unknown.\n";
         } else {
-            ctx.database_ready = true;
-            std::cout << "[*] Redis fingerprint database loaded: " << loaded << " entries\n";
+            const std::string seed_path = resolve_data_file(
+                opts.seed_filename, {"../db/seed_fingerprints.json", "../../db/seed_fingerprints.json"});
+            const std::string manifest_path = resolve_data_file(
+                opts.manifest_filename, {"../db/capture_manifest.json", "../../db/capture_manifest.json"});
+            const std::string legacy_path = resolve_data_file(
+                "code/python/fingerprints.json", {"../python/fingerprints.json", "../../python/fingerprints.json"});
+            const std::size_t loaded = ctx.database->load_seed_files(seed_path, manifest_path) +
+                ctx.database->load_legacy_ja3_file(legacy_path);
+            if (loaded == 0) {
+                std::cerr << "[-] Warning: No fingerprint seed entries loaded from " << seed_path << ".\n";
+            } else {
+                ctx.database_ready = true;
+                std::cout << "[*] Redis fingerprint database loaded: " << loaded << " entries\n";
+            }
         }
     }
 
@@ -432,17 +514,33 @@ bool start_capture(const CaptureOptions &opts) {
         }
     }
 
-    int loop_status = pcap_loop(handle, 0, packet_callback, reinterpret_cast<u_char*>(&ctx));
+    // Measure strictly the packet ingestion and dissection loop
+    ctx.start_time = std::chrono::steady_clock::now();
 
+    int loop_status = pcap_loop(handle, 0, packet_callback, reinterpret_cast<u_char*>(&ctx));
     // Diagnostics & Clean Teardown
+    auto end_time = std::chrono::steady_clock::now();
+    double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - ctx.start_time).count();
+    double elapsed_sec = elapsed_ms / 1000.0;
+    double pps = (elapsed_sec > 0.0) ? (static_cast<double>(ctx.total_packets) / elapsed_sec) : 0.0;
     bool success = true;
-    if (loop_status == -1) {
-        std::cerr << "[-] pcap_loop aborted due to error: " << pcap_geterr(handle) << "\n";
-        success = false;
-    } else if (loop_status == -2) {
-        std::cout << "[*] Capture terminated by signal.\n";
+    if (opts.quiet) {
+        std::cout << "=================== TLSFP Benchmark Summary ===================\n"
+                  << " Total Packets Scanned : " << ctx.total_packets << "\n"
+                  << " ClientHellos Found    : " << ctx.client_hellos << "\n"
+                  << " ServerHellos Found    : " << ctx.server_hellos << "\n"
+                  << " Execution Time        : " << elapsed_ms << " ms\n"
+                  << " Packet Throughput     : " << static_cast<uint64_t>(pps) << " pkts/sec\n"
+                  << "===============================================================\n";
     } else {
-        std::cout << "[*] Reached end of capture file.\n";
+        if (loop_status == -1) {
+            std::cerr << "[-] pcap_loop aborted due to error: " << pcap_geterr(handle) << "\n";
+            success = false;
+        } else if (loop_status == -2) {
+            std::cout << "[*] Capture terminated by signal.\n";
+        } else {
+            std::cout << "[*] Reached end of capture file.\n";
+        }
     }
 
     if (ctx.dumper) {
