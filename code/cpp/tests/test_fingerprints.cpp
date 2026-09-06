@@ -900,21 +900,97 @@ TEST(JA3Test, ChangingOrderChangesFingerprint) {
     EXPECT_NE(fp_a.md5_hash, fp_b.md5_hash);
 }
 
+static std::vector<uint8_t> build_client_hello(
+    const std::vector<uint16_t>& cipher_suites,
+    const std::vector<uint8_t>& extensions) {
+
+    std::vector<uint8_t> handshake;
+
+    // ClientHello version: TLS 1.2
+    handshake.push_back(0x03);
+    handshake.push_back(0x03);
+
+    // Random: 32 bytes
+    handshake.insert(handshake.end(), 32, 0x00);
+
+    // Session ID length = 0
+    handshake.push_back(0x00);
+
+    // Cipher suites
+    const uint16_t cipher_len =
+        static_cast<uint16_t>(cipher_suites.size() * 2);
+
+    handshake.push_back(
+        static_cast<uint8_t>(cipher_len >> 8));
+    handshake.push_back(
+        static_cast<uint8_t>(cipher_len & 0xff));
+
+    for (uint16_t cipher : cipher_suites) {
+        handshake.push_back(
+            static_cast<uint8_t>(cipher >> 8));
+        handshake.push_back(
+            static_cast<uint8_t>(cipher & 0xff));
+    }
+
+    // Compression methods: one method, null compression.
+    handshake.push_back(0x01);
+    handshake.push_back(0x00);
+
+    // Extensions length
+    const uint16_t extensions_len =
+        static_cast<uint16_t>(extensions.size());
+
+    handshake.push_back(
+        static_cast<uint8_t>(extensions_len >> 8));
+    handshake.push_back(
+        static_cast<uint8_t>(extensions_len & 0xff));
+
+    handshake.insert(
+        handshake.end(),
+        extensions.begin(),
+        extensions.end());
+
+    // TLS Handshake header.
+    std::vector<uint8_t> record;
+
+    record.push_back(0x16); // Handshake
+    record.push_back(0x03);
+    record.push_back(0x01); // TLS record version
+
+    const uint16_t record_len =
+        static_cast<uint16_t>(4 + handshake.size());
+
+    record.push_back(
+        static_cast<uint8_t>(record_len >> 8));
+    record.push_back(
+        static_cast<uint8_t>(record_len & 0xff));
+
+    // ClientHello handshake type.
+    record.push_back(0x01);
+
+    const uint32_t handshake_len =
+        static_cast<uint32_t>(handshake.size());
+
+    record.push_back(
+        static_cast<uint8_t>(handshake_len >> 16));
+    record.push_back(
+        static_cast<uint8_t>(handshake_len >> 8));
+    record.push_back(
+        static_cast<uint8_t>(handshake_len & 0xff));
+
+    record.insert(
+        record.end(),
+        handshake.begin(),
+        handshake.end());
+
+    return record;
+}
+
 // ============================================================
 // GREASE tests - source Documentation
 // ============================================================
 TEST(JA3Test, GreaseCipherIsIgnored) {
-    ClientHelloData without_grease{};
-    ClientHelloData with_grease{};
-
-    without_grease.client_version = 771;
-    with_grease.client_version = 771;
-
-    without_grease.cipher_suites = {
-        4865, 4866, 4867
-    };
-
-    with_grease.cipher_suites = {
+    const std::vector<uint16_t> ciphers = {
         0x0a0a,
         4865,
         0x1a1a,
@@ -922,64 +998,137 @@ TEST(JA3Test, GreaseCipherIsIgnored) {
         4867
     };
 
-    const JA3Fingerprint a =
-        compute_ja3(without_grease);
+    const auto client_hello =
+        build_client_hello(ciphers, {});
 
-    const JA3Fingerprint b =
-        compute_ja3(with_grease);
+    ClientHelloData client{};
 
-    EXPECT_EQ(a.raw_string, b.raw_string);
-    EXPECT_EQ(a.md5_hash, b.md5_hash);
+    ASSERT_TRUE(
+        parse_client_hello(
+            client_hello.data(),
+            client_hello.size(),
+            client));
+
+    EXPECT_EQ(
+        client.cipher_suites,
+        std::vector<uint16_t>({
+            4865,
+            4866,
+            4867
+        }));
+
+    const JA3Fingerprint fp =
+        compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,4865-4866-4867,,,");
 }
 
 
 TEST(JA3Test, GreaseExtensionIsIgnored) {
-    ClientHelloData without_grease{};
-    ClientHelloData with_grease{};
+    const std::vector<uint8_t> extensions = {
+        // GREASE extension 0x0a0a
+        0x0a, 0x0a,
+        0x00, 0x00,
 
-    without_grease.client_version = 771;
-    with_grease.client_version = 771;
+        // Extension 0
+        0x00, 0x00,
+        0x00, 0x00,
 
-    without_grease.extensions = {
-        0, 10, 11
+        // GREASE extension 0x1a1a
+        0x1a, 0x1a,
+        0x00, 0x00,
+
+        // Extension 10
+        0x00, 0x0a,
+        0x00, 0x00,
+
+        // Extension 11
+        0x00, 0x0b,
+        0x00, 0x00
     };
 
-    with_grease.extensions = {
-        0x0a0a,
-        0,
-        0x1a1a,
-        10,
-        11
-    };
+    const auto client_hello =
+        build_client_hello(
+            {4865, 4866, 4867},
+            extensions);
 
-    const JA3Fingerprint a =
-        compute_ja3(without_grease);
+    ClientHelloData client{};
 
-    const JA3Fingerprint b =
-        compute_ja3(with_grease);
+    ASSERT_TRUE(
+        parse_client_hello(
+            client_hello.data(),
+            client_hello.size(),
+            client));
 
-    EXPECT_EQ(a.raw_string, b.raw_string);
-    EXPECT_EQ(a.md5_hash, b.md5_hash);
+    EXPECT_EQ(
+        client.extensions,
+        std::vector<uint16_t>({
+            0,
+            10,
+            11
+        }));
+
+    const JA3Fingerprint fp =
+        compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,4865-4866-4867,0-10-11,,");
 }
 
 
 TEST(JA3Test, GreaseSupportedGroupIsIgnored) {
-    ClientHelloData client{};
+    const std::vector<uint8_t> extensions = {
+        // Extension 0x000a: Supported Groups
+        0x00, 0x0a,
 
-    client.client_version = 771;
+        // Extension length = 10
+        0x00, 0x0a,
 
-    client.supported_groups = {
-        0x0a0a,
-        23,
-        0x1a1a,
-        24
+        // Supported groups vector length = 8
+        0x00, 0x08,
+
+        // GREASE 0x0a0a
+        0x0a, 0x0a,
+
+        // secp256r1 = 23
+        0x00, 0x17,
+
+        // GREASE 0x1a1a
+        0x1a, 0x1a,
+
+        // secp384r1 = 24
+        0x00, 0x18
     };
 
-    const JA3Fingerprint fp = compute_ja3(client);
+    const auto client_hello =
+        build_client_hello(
+            {4865, 4866, 4867},
+            extensions);
+
+    ClientHelloData client{};
+
+    ASSERT_TRUE(
+        parse_client_hello(
+            client_hello.data(),
+            client_hello.size(),
+            client));
+
+    EXPECT_EQ(
+        client.supported_groups,
+        std::vector<uint16_t>({
+            23,
+            24
+        }));
+
+    const JA3Fingerprint fp =
+        compute_ja3(client);
 
     EXPECT_EQ(
         fp.raw_string,
-        "771,,,23-24,");
+        "771,4865-4866-4867,10,23-24,");
 }
 
 
