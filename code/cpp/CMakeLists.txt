@@ -30,6 +30,7 @@ add_executable(tlsfp_engine
     src/parser.cpp
     src/ja3.cpp
     src/ja4.cpp
+    src/db.cpp
 )
 
 target_compile_features(tlsfp_engine PRIVATE cxx_std_17)
@@ -62,4 +63,4 @@ target_link_libraries(tlsfp_engine PRIVATE
     pcap::pcap
     OpenSSL::Crypto
     Threads::Threads
-)
+)

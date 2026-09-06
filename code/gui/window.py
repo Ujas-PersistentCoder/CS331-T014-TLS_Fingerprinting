@@ -3,8 +3,10 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
     QTableWidget, QTableWidgetItem, QFileDialog, QHeaderView, 
     QComboBox, QLabel, QTextEdit
+    , QInputDialog
 )
 from scapy.all import get_working_ifaces
+from src.db import FingerprintDB
 from workers import PcapWorker, LiveCaptureWorker
 
 class TlsMonitorGui(QMainWindow):
@@ -15,6 +17,7 @@ class TlsMonitorGui(QMainWindow):
 
         self.dbPath = pythonEngineDir / "fingerprints.json"
         self.pcapsDir = pythonEngineDir.parent / "pcaps"
+        self.fingerprintDb = FingerprintDB(str(self.dbPath))
         self.pcapWorker = None
         self.liveWorker = None
         self.rowCache = []
@@ -41,6 +44,11 @@ class TlsMonitorGui(QMainWindow):
         self.liveButton = QPushButton("Start Live Capture")
         self.liveButton.clicked.connect(self.toggleLiveCapture)
         controlLayout.addWidget(self.liveButton)
+
+        self.labelButton = QPushButton("Label Selected Fingerprint")
+        self.labelButton.clicked.connect(self.labelSelectedFingerprint)
+        self.labelButton.setEnabled(False)
+        controlLayout.addWidget(self.labelButton)
 
         controlLayout.addStretch()
         mainLayout.addLayout(controlLayout)
@@ -111,10 +119,13 @@ class TlsMonitorGui(QMainWindow):
     def displayRowDetails(self):
         selectedRows = self.dataTable.selectionModel().selectedRows()
         if not selectedRows:
+            self.labelButton.setEnabled(False)
             return
         rowIndex = selectedRows[0].row()
         if rowIndex < len(self.rowCache):
             entry = self.rowCache[rowIndex]
+            isUnknown = entry.get("matchedClient") in (None, "", "Unknown")
+            self.labelButton.setEnabled(isUnknown)
             detailText = (
                 f"SNI:        {entry['sni']}\n"
                 f"JA3 Hash:   {entry['ja3Hash']}\n"
@@ -122,3 +133,37 @@ class TlsMonitorGui(QMainWindow):
                 f"Raw JA3:    {entry.get('ja3Raw', 'N/A')}"
             )
             self.detailsPane.setText(detailText)
+
+    def labelSelectedFingerprint(self):
+        selectedRows = self.dataTable.selectionModel().selectedRows()
+        if not selectedRows:
+            return
+
+        rowIndex = selectedRows[0].row()
+        if rowIndex >= len(self.rowCache):
+            return
+        entry = self.rowCache[rowIndex]
+        if entry.get("matchedClient") not in (None, "", "Unknown"):
+            return
+
+        label, accepted = QInputDialog.getText(
+            self,
+            "Label Fingerprint",
+            "Verified client name:",
+        )
+        if not accepted or not label.strip():
+            return
+
+        try:
+            self.fingerprintDb.enroll(
+                entry["ja3Hash"],
+                entry.get("fingerprintKind", "ja3"),
+                label,
+            )
+        except (OSError, ValueError) as error:
+            self.detailsPane.setText(f"Could not save fingerprint: {error}")
+            return
+
+        entry["matchedClient"] = label.strip()
+        self.dataTable.setItem(rowIndex, 4, QTableWidgetItem(entry["matchedClient"]))
+        self.displayRowDetails()

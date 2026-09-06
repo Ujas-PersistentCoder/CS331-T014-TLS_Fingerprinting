@@ -27,13 +27,14 @@ class PcapWorker(QThread):
                 if result.client_hello:
                     clientHello = result.client_hello
                     ja3Hash = compute_ja3_hash(clientHello)
-                    match = self.fingerprintDb.lookup(ja3Hash) or "Unknown"
+                    match = self.fingerprintDb.lookup(ja3Hash, "ja3") or "Unknown"
 
                     packetData = {
                         "source": f"{result.src_ip}:{result.src_port}",
                         "destination": f"{result.dst_ip}:{result.dst_port}",
                         "sni": clientHello.server_name or "N/A",
                         "ja3Hash": ja3Hash,
+                        "fingerprintKind": "ja3",
                         "matchedClient": match,
                         "ja3Raw": compute_ja3_string(clientHello),
                     }
@@ -80,13 +81,14 @@ class LiveCaptureWorker(QThread):
             if res.client_hello:
                 clientHello = res.client_hello
                 ja3Hash = compute_ja3_hash(clientHello)
-                match = self.fingerprintDb.lookup(ja3Hash) or "Unknown"
+                match = self.fingerprintDb.lookup(ja3Hash, "ja3") or "Unknown"
 
                 packetData = {
                     "source": f"{res.src_ip}:{res.src_port}",
                     "destination": f"{res.dst_ip}:{res.dst_port}",
                     "sni": clientHello.server_name or "N/A",
                     "ja3Hash": ja3Hash,
+                    "fingerprintKind": "ja3",
                     "matchedClient": match,
                     "ja3Raw": compute_ja3_string(clientHello),
                 }

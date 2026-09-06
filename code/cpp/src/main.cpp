@@ -14,6 +14,7 @@ static void print_usage(const char *prog_name) {
               << "  -r <pcap_file>   Read packets from offline PCAP file\n"
               << "  -w <pcap_file>   Save matched TLS handshakes to output PCAP\n"
               << "  -f <bpf_filter>  Custom BPF filter expression (default: 'tcp')\n"
+              << "  -a               Prompt to label unknown fingerprints\n"
               << "  -h               Show this help message\n\n"
               << "Examples:\n"
               << "  Live Capture:    " << prog_name << " -i eth0 -f \"tcp port 443\"\n"
@@ -30,12 +31,13 @@ int main(int argc, char *argv[]) {
     tlsfp::CaptureOptions opts;
     int opt;
 
-    while ((opt = getopt(argc, argv, "i:r:w:f:h")) != -1) {
+    while ((opt = getopt(argc, argv, "i:r:w:f:ah")) != -1) {
         switch (opt) {
             case 'i': opts.interface_name = optarg; break;
             case 'r': opts.read_filename  = optarg; break;
             case 'w': opts.write_filename = optarg; break;
             case 'f': opts.bpf_filter     = optarg; break;
+            case 'a': opts.prompt_unknown = true; break;
             case 'h': print_usage(argv[0]); return 0;
             default:  print_usage(argv[0]); return 1;
         }

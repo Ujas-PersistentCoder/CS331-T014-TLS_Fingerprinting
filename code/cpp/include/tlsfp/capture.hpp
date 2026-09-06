@@ -1,10 +1,12 @@
 #ifndef TLSFP_CAPTURE_HPP
 #define TLSFP_CAPTURE_HPP
 
+#include "tlsfp/db.hpp"
 #include "tlsfp/parser.hpp"
 #include <string>
 #include <pcap.h>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
 #include <cstdint>
 #include <netinet/in.h>
@@ -16,6 +18,10 @@ struct CaptureOptions {
     std::string read_filename; //stores path to pcap file for offline analysis
     std::string write_filename; //stores path to pcap file for writing captured packets
     std::string bpf_filter{"tcp"};
+    RedisConfig redis_config;
+    std::string seed_filename{"code/db/seed_fingerprints.json"};
+    std::string manifest_filename{"code/db/capture_manifest.json"};
+    bool prompt_unknown{false};
 };
 
 //A connection is uniquely identified by the 5-tuple: (src_ip, dst_ip, src_port, dst_port, protocol)
@@ -77,6 +83,9 @@ struct CaptureContext {
 
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
+    std::unique_ptr<FingerprintDatabase> database;
+    bool database_ready{false};
+    bool prompt_unknown{false};
     
     // Periodic sweep counter to prevent memory growth from abandoned flows
     uint64_t packet_counter{0};
