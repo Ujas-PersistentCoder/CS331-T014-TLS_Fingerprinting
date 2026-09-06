@@ -53,15 +53,24 @@
       "category": "browser",
       "source": "self-captured: firefox_headless_20260831_061342.pcap",
       "notes": ""
+    },
+    {
+      "hash": "0149f47eabf9a20d0893e2a44e5a6323",
+      "client": "curl",
+      "version": "controlled local capture",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: controlled_curl.pcap",
+      "notes": "Generated with curl against the local OpenSSL s_server on loopback."
     }
   ],
   "ja3s": [
     {
       "hash": "15af977ce25de452b96affa2addb1036",
-      "server": "curl_test2",
+      "server": "OpenSSL s_server (also observed in curl_test2)",
       "category": "server",
-      "source": "self-captured: curl_test2_20260831_053405.pcap",
-      "notes": ""
+      "source": "self-captured: controlled_curl.pcap",
+      "notes": "Controlled local OpenSSL server capture; same JA3S was also present in the legacy curl_test2 capture."
     },
     {
       "hash": "f4febc55ea12b31ae17cfb7e614afda8",
@@ -125,15 +134,42 @@
       "category": "browser",
       "source": "self-captured: firefox_headless_20260831_061342.pcap",
       "notes": "JA4 best-effort, verify against reference"
+    },
+    {
+      "hash": "t13d3110h2_e8f1e7e78f70_b26ce05bbdd6",
+      "client": "curl",
+      "version": "controlled local capture",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: controlled_curl.pcap",
+      "notes": "Generated with curl against the local OpenSSL s_server on loopback."
+    },
+    {
+      "hash": "t13d3011h2_1d37bd780c83_8537cf56674e",
+      "client": "curl (Modern)",
+      "version": "unknown",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: cloudflare_run1.pcap",
+      "notes": "JA4 correlated with the known JA3 catalog entry 7a73fb0bdeaa2a79fadf356c34e7577e"
+    },
+    {
+      "hash": "t13d2011h2_a09f3c656075_7f0f34a4126d",
+      "client": "VS Code Update Client",
+      "version": "unknown",
+      "os": "linux",
+      "category": "application",
+      "source": "self-captured: cloudflare_run1.pcap",
+      "notes": "JA4 correlated with the known JA3 catalog entry ecdf4f49dd59effc439639da29186671"
     }
   ],
   "ja4s": [
     {
       "hash": "t130200_1302_a56c5b993250",
-      "server": "curl_test2",
+      "server": "OpenSSL s_server (also observed in curl_test2)",
       "category": "server",
-      "source": "self-captured: curl_test2_20260831_053405.pcap",
-      "notes": "JA4S best-effort, verify against reference"
+      "source": "self-captured: controlled_curl.pcap",
+      "notes": "Controlled local OpenSSL server capture; same JA4S was also present in the legacy curl_test2 capture."
     },
     {
       "hash": "t130200_1301_a56c5b993250",

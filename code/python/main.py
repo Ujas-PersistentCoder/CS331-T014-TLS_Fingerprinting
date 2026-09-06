@@ -53,7 +53,7 @@ def main():
                 ch = result.client_hello
                 ja3_raw = compute_ja3_string(ch)
                 ja3_hash = compute_ja3_hash(ch)
-                match = db.lookup(ja3_hash)
+                match = db.lookup(ja3_hash, "ja3")
 
                 print(f"[ClientHello] {result.src_ip}:{result.src_port}"
                       f" -> {result.dst_ip}:{result.dst_port}")
@@ -84,7 +84,7 @@ def main():
                 sh = result.server_hello
                 ja3s_raw = compute_ja3s_string(sh)
                 ja3s_hash = compute_ja3s_hash(sh)
-                match = db.lookup(ja3s_hash)
+                match = db.lookup(ja3s_hash, "ja3s")
 
                 print(f"[ServerHello] {result.src_ip}:{result.src_port}"
                       f" -> {result.dst_ip}:{result.dst_port}")

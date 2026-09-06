@@ -9,9 +9,46 @@
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <filesystem>
 #include <unistd.h>
+#include <initializer_list>
 
 namespace tlsfp {
+
+namespace {
+
+std::string resolve_data_file(const std::string &requested,
+                              std::initializer_list<const char *> fallbacks) {
+    if (std::filesystem::exists(requested)) return requested;
+    for (const char *fallback : fallbacks) {
+        if (std::filesystem::exists(fallback)) return fallback;
+    }
+    return requested;
+}
+
+std::string lookup_label(CaptureContext &ctx, FingerprintKind kind,
+                         const std::string &hash) {
+    if (!ctx.database_ready || !ctx.database) return "<database unavailable>";
+
+    FingerprintRecord record;
+    if (!ctx.database->lookup(kind, hash, record)) {
+        if (!ctx.prompt_unknown) return "<unknown>";
+
+        std::cout << "[?] Unknown " << FingerprintDatabase::kind_name(kind)
+                  << " fingerprint " << hash << ". Enter verified client/server name"
+                  << " (empty to skip): " << std::flush;
+        std::string name;
+        if (!std::getline(std::cin, name) || name.empty()) return "<unknown>";
+        if (!ctx.database->enroll(kind, hash, name)) return "<unknown>";
+        record.name = name;
+        record.category = "enrolled";
+    }
+    if (record.name.empty()) return "<unnamed>";
+    if (record.category.empty()) return record.name;
+    return record.name + " (" + record.category + ")";
+}
+
+} // namespace
 
 // Atomic handle for async-signal-safe termination
 static std::atomic<pcap_t*> g_pcap_handle{nullptr};
@@ -277,6 +314,8 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         if (parse_client_hello(buf.bytes, total_record_len, ctx->client_scratchpad)) {
             JA3Fingerprint ja3 = compute_ja3(ctx->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx->client_scratchpad);
+            const std::string ja3_match = lookup_label(*ctx, FingerprintKind::JA3, ja3.md5_hash);
+            const std::string ja4_match = lookup_label(*ctx, FingerprintKind::JA4, ja4.full_fp);
 
             std::cout << "[+] Captured ClientHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
                       << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
@@ -284,7 +323,9 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
                       << "  ├─ [SNI]        " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
                       << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
                       << "  ├─ [JA3 Hash]   " << ja3.md5_hash << "\n"
-                      << "  └─ [JA4]        " << ja4.full_fp << "\n";
+                      << "  ├─ [JA3 Match]  " << ja3_match << "\n"
+                      << "  ├─ [JA4]        " << ja4.full_fp << "\n"
+                      << "  └─ [JA4 Match]  " << ja4_match << "\n";
 
             if (ctx->dumper) {
                 pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
@@ -295,13 +336,17 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
         if (parse_server_hello(buf.bytes, total_record_len, ctx->server_scratchpad)) {
             JA3Fingerprint ja3s = compute_ja3s(ctx->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(ctx->server_scratchpad);
+            const std::string ja3s_match = lookup_label(*ctx, FingerprintKind::JA3S, ja3s.md5_hash);
+            const std::string ja4s_match = lookup_label(*ctx, FingerprintKind::JA4S, ja4s.full_fp);
 
             std::cout << "[+] Captured ServerHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
                       << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
                       << " | Reassembled Size: " << total_record_len << " bytes\n"
                       << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
                       << "  ├─ [JA3S Hash]   " << ja3s.md5_hash << "\n"
-                      << "  └─ [JA4S]        " << ja4s.full_fp << "\n";
+                      << "  ├─ [JA3S Match]  " << ja3s_match << "\n"
+                      << "  ├─ [JA4S]        " << ja4s.full_fp << "\n"
+                      << "  └─ [JA4S Match]  " << ja4s_match << "\n";
 
             if (ctx->dumper) {
                 pcap_dump(reinterpret_cast<u_char*>(ctx->dumper), pkthdr, packet);
@@ -354,7 +399,28 @@ bool start_capture(const CaptureOptions &opts) {
 
     CaptureContext ctx;
     ctx.link_type = pcap_datalink(handle);
+    ctx.prompt_unknown = opts.prompt_unknown;
     std::cout << "[*] Capture initialized. Datalink type: " << ctx.link_type << "\n";
+
+    ctx.database = std::make_unique<FingerprintDatabase>(opts.redis_config);
+    if (!ctx.database->connect()) {
+        std::cerr << "[-] Warning: Redis database unavailable; fingerprints will be reported as unknown.\n";
+    } else {
+        const std::string seed_path = resolve_data_file(
+            opts.seed_filename, {"../db/seed_fingerprints.json", "../../db/seed_fingerprints.json"});
+        const std::string manifest_path = resolve_data_file(
+            opts.manifest_filename, {"../db/capture_manifest.json", "../../db/capture_manifest.json"});
+        const std::string legacy_path = resolve_data_file(
+            "code/python/fingerprints.json", {"../python/fingerprints.json", "../../python/fingerprints.json"});
+        const std::size_t loaded = ctx.database->load_seed_files(seed_path, manifest_path) +
+            ctx.database->load_legacy_ja3_file(legacy_path);
+        if (loaded == 0) {
+            std::cerr << "[-] Warning: No fingerprint seed entries loaded from " << seed_path << ".\n";
+        } else {
+            ctx.database_ready = true;
+            std::cout << "[*] Redis fingerprint database loaded: " << loaded << " entries\n";
+        }
+    }
 
     if (!opts.write_filename.empty()) {
         ctx.dumper = pcap_dump_open(handle, opts.write_filename.c_str());
