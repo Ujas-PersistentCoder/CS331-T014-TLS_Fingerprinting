@@ -136,7 +136,12 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
     fp.ja4_a.push_back(static_cast<char>('0' + (ciphers_count / 10)));
     fp.ja4_a.push_back(static_cast<char>('0' + (ciphers_count % 10)));
 
-    // Filter Extensions: Exclude SNI (0x0000) and ALPN (0x0010)
+    // Number of Extensions in JA4_a: All non-GREASE extensions (including SNI and ALPN)
+    size_t exts_count = std::min<size_t>(client.extensions.size(), 99);
+    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count / 10)));
+    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count % 10)));
+
+    // Filter Extensions for JA4_c: Exclude SNI (0x0000) and ALPN (0x0010)
     std::vector<uint16_t> filtered_exts;
     filtered_exts.reserve(client.extensions.size());
     for (uint16_t ext : client.extensions) {
@@ -144,11 +149,6 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
             filtered_exts.push_back(ext);
         }
     }
-
-    // Number of Extensions (excluding GREASE, SNI, ALPN, saturated at 99)
-    size_t exts_count = std::min<size_t>(filtered_exts.size(), 99);
-    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count / 10)));
-    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count % 10)));
 
     // ALPN (2 chars)
     char alpn_first, alpn_last;
@@ -212,7 +212,12 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
         default:     fp.ja4_a.append("00"); break;
     }
 
-    // Filter Extensions (exclude ALPN 0x0010 and GREASE)
+    // Extension Count in JA4S_a: All non-GREASE extensions (including ALPN)
+    size_t exts_count = std::min<size_t>(server.extensions.size(), 99);
+    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count / 10)));
+    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count % 10)));
+
+    // Filter Extensions for JA4S_c: Exclude ALPN (0x0010)
     std::vector<uint16_t> filtered_exts;
     filtered_exts.reserve(server.extensions.size());
     for (uint16_t ext : server.extensions) {
@@ -220,11 +225,6 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
             filtered_exts.push_back(ext);
         }
     }
-
-    // Extension Count (2 digits, saturated at 99)
-    size_t exts_count = std::min<size_t>(filtered_exts.size(), 99);
-    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count / 10)));
-    fp.ja4_a.push_back(static_cast<char>('0' + (exts_count % 10)));
 
     // Negotiated ALPN
     char alpn_first, alpn_last;

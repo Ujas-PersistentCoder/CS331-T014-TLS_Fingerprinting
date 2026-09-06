@@ -171,10 +171,25 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
 
     // Payload Bounds Check
     size_t header_total_len = link_header_len + ip_header_len + tcp_header_len;
-    if (pkthdr->caplen <= header_total_len) return; // No payload present
+    if (pkthdr->caplen <= header_total_len) return; // Discard pure ACKs, SYNs, etc.
 
     size_t payload_len = pkthdr->caplen - header_total_len;
     const uint8_t *payload = packet + header_total_len;
+
+    // Strip TLS 1.3 Middlebox Compatibility ChangeCipherSpec (0x14 0x03 0x03 0x00 0x01 0x01)
+    // When a HelloRetryRequest occurs, clients prepend this 6-byte record before the 2nd ClientHello
+    if (payload_len >= 6 && 
+        payload[0] == 0x14 && 
+        payload[1] == 0x03 && 
+        payload[2] == 0x03 && 
+        payload[3] == 0x00 && 
+        payload[4] == 0x01) {
+        payload += 6;
+        payload_len -= 6;
+        seq += 6; // Advance sequence anchor to match stripped payload
+    }
+
+    if (payload_len == 0) return;
 
     // Flow Lookup & Fast Non-TLS Filter
     auto it = ctx->active_flows.find(key);
