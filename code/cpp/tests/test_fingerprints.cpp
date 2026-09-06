@@ -196,7 +196,8 @@ protected:
     }
 
     std::vector<uint8_t> build_ip_tcp_payload(
-        const std::vector<uint8_t>& payload) {
+        const std::vector<uint8_t>& payload,
+        uint32_t sequence = 1000) {
 
         constexpr size_t ip_len = 20;
         constexpr size_t tcp_len = 20;
@@ -204,43 +205,39 @@ protected:
         std::vector<uint8_t> pkt(
             ip_len + tcp_len + payload.size(), 0);
 
-        // IPv4 header
-        pkt[0] = 0x45;  // IPv4, IHL = 5
+        pkt[0] = 0x45;
 
         uint16_t total_len =
-            htons(static_cast<uint16_t>(
-                ip_len + tcp_len + payload.size()));
+            htons(static_cast<uint16_t>(pkt.size()));
 
-        std::memcpy(&pkt[2], &total_len, sizeof(total_len));
+        std::memcpy(
+            &pkt[2],
+            &total_len,
+            sizeof(total_len));
 
         pkt[9] = IPPROTO_TCP;
 
-        // Source IP: 10.0.0.1
         pkt[12] = 10;
         pkt[13] = 0;
         pkt[14] = 0;
         pkt[15] = 1;
 
-        // Destination IP: 10.0.0.2
         pkt[16] = 10;
         pkt[17] = 0;
         pkt[18] = 0;
         pkt[19] = 2;
 
-        // TCP header
         uint16_t sport = htons(12345);
         uint16_t dport = htons(443);
 
-        uint32_t net_seq = htonl(1000);
+        uint32_t net_seq = htonl(sequence);
 
-        std::memcpy(&pkt[20], &sport, sizeof(sport));
-        std::memcpy(&pkt[22], &dport, sizeof(dport));
-        std::memcpy(&pkt[24], &net_seq, sizeof(net_seq));
+        std::memcpy(&pkt[20], &sport, 2);
+        std::memcpy(&pkt[22], &dport, 2);
+        std::memcpy(&pkt[24], &net_seq, 4);
 
-        // TCP data offset = 5 words = 20 bytes
         pkt[32] = 0x50;
 
-        // TCP payload
         if (!payload.empty()) {
             std::memcpy(
                 &pkt[40],
@@ -367,4 +364,782 @@ TEST_F(LinkLayerDemuxTest, RejectsUnknownDlt) {
     inject_packet(pkt);
 
     EXPECT_EQ(ctx.active_flows.size(), 0);
+}
+
+TEST_F(LinkLayerDemuxTest, HandlesEthernet) {
+    ctx.link_type = DLT_EN10MB;
+
+    const std::vector<uint8_t> payload = {
+        0x16, 0x03, 0x01, 0x00, 0x50
+    };
+
+    const auto ip_pkt =
+        build_ip_tcp_payload(payload);
+
+    std::vector<uint8_t> pkt(
+        14 + ip_pkt.size(), 0);
+
+    // Destination MAC
+    pkt[0] = 0x00;
+    pkt[1] = 0x11;
+    pkt[2] = 0x22;
+    pkt[3] = 0x33;
+    pkt[4] = 0x44;
+    pkt[5] = 0x55;
+
+    // Source MAC
+    pkt[6] = 0x66;
+    pkt[7] = 0x77;
+    pkt[8] = 0x88;
+    pkt[9] = 0x99;
+    pkt[10] = 0xaa;
+    pkt[11] = 0xbb;
+
+    // IPv4 EtherType.
+    pkt[12] = 0x08;
+    pkt[13] = 0x00;
+
+    std::memcpy(
+        pkt.data() + 14,
+        ip_pkt.data(),
+        ip_pkt.size());
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 1u);
+}
+
+TEST_F(LinkLayerDemuxTest, HandlesLinuxSLL2) {
+    ctx.link_type = DLT_LINUX_SLL2;
+
+    const std::vector<uint8_t> payload = {
+        0x16, 0x03, 0x01, 0x00, 0x50
+    };
+
+    const auto ip_pkt =
+        build_ip_tcp_payload(payload);
+
+    std::vector<uint8_t> pkt(
+        20 + ip_pkt.size(), 0);
+
+    // SLL2 protocol is bytes 0-1.
+    pkt[0] = 0x08;
+    pkt[1] = 0x00;
+
+    std::memcpy(
+        pkt.data() + 20,
+        ip_pkt.data(),
+        ip_pkt.size());
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 1u);
+}
+
+TEST_F(LinkLayerDemuxTest, RejectsTruncatedRawPacket) {
+    ctx.link_type = DLT_RAW;
+
+    std::vector<uint8_t> pkt = {
+        0x45
+    };
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsNonIPv4Version) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x03, 0x01, 0x00, 0x50
+    });
+
+    pkt[0] = 0x65;
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsUDP) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x03, 0x01, 0x00, 0x50
+    });
+
+    pkt[9] = IPPROTO_UDP;
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsTruncatedTCPHeader) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x03, 0x01, 0x00, 0x50
+    });
+
+    pkt.resize(35);
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsInvalidTCPDataOffset) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x03, 0x01, 0x00, 0x50
+    });
+
+    // TCP data offset = 4 words = 16 bytes.
+    pkt[32] = 0x40;
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, IgnoresEmptyTCPPayload) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({});
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsNonTLSPayload) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        'G', 'E', 'T', ' '
+    });
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+TEST_F(LinkLayerDemuxTest, RejectsInvalidTLSRecordType) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x15, 0x03, 0x03, 0x00, 0x04
+    });
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsInvalidTLSMajorVersion) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x02, 0x03, 0x00, 0x04
+    });
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsTLSVersionAbove0304) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x03, 0x05, 0x00, 0x04
+    });
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+
+TEST_F(LinkLayerDemuxTest, RejectsOversizedTLSRecord) {
+    ctx.link_type = DLT_RAW;
+
+    auto pkt = build_ip_tcp_payload({
+        0x16, 0x03, 0x03, 0x40, 0x01
+    });
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+TEST_F(LinkLayerDemuxTest, TLSRecordCanBeSplitAcrossTCPPackets) {
+    ctx.link_type = DLT_RAW;
+
+    const std::vector<uint8_t> part1 = {
+        0x16, 0x03, 0x03
+    };
+
+    const std::vector<uint8_t> part2 = {
+        0x00, 0x04,
+        0x01, 0x00, 0x00, 0x00
+    };
+
+    auto pkt1 =
+        build_ip_tcp_payload(part1, 1000);
+
+    auto pkt2 =
+        build_ip_tcp_payload(part2, 1003);
+
+    inject_packet(pkt1);
+
+    // First packet only contains an incomplete TLS header.
+    EXPECT_EQ(ctx.active_flows.size(), 1u);
+
+    inject_packet(pkt2);
+
+    // The TLS record should now be complete.
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+TEST_F(LinkLayerDemuxTest, OutOfOrderPacketDropsFlow) {
+    ctx.link_type = DLT_RAW;
+
+    const std::vector<uint8_t> first = {
+        0x16, 0x03, 0x03
+    };
+
+    const std::vector<uint8_t> future = {
+        0x00, 0x04
+    };
+
+    inject_packet(
+        build_ip_tcp_payload(first, 1000));
+
+    ASSERT_EQ(ctx.active_flows.size(), 1u);
+
+    // Expected sequence is now 1003.
+    // Sending 1010 creates a gap.
+    inject_packet(
+        build_ip_tcp_payload(future, 1010));
+
+    EXPECT_EQ(ctx.active_flows.size(), 0u);
+}
+
+TEST_F(LinkLayerDemuxTest, EntireRetransmissionIsIgnored) {
+    ctx.link_type = DLT_RAW;
+
+    const std::vector<uint8_t> payload = {
+        0x16, 0x03, 0x03
+    };
+
+    inject_packet(
+        build_ip_tcp_payload(payload, 1000));
+
+    ASSERT_EQ(ctx.active_flows.size(), 1u);
+
+    auto it = ctx.active_flows.begin();
+
+    const uint16_t len_after_first =
+        it->second.len;
+
+    inject_packet(
+        build_ip_tcp_payload(payload, 1000));
+
+    it = ctx.active_flows.find(it->first);
+
+    ASSERT_NE(it, ctx.active_flows.end());
+
+    EXPECT_EQ(
+        it->second.len,
+        len_after_first);
+}
+
+// ============================================================
+// MD5 TESTS - source RFC 1321
+// ============================================================
+
+TEST(MD5Test, EmptyString) {
+    EXPECT_EQ(
+        md5_hex(""),
+        "d41d8cd98f00b204e9800998ecf8427e");
+}
+
+TEST(MD5Test, ABC) {
+    EXPECT_EQ(
+        md5_hex("abc"),
+        "900150983cd24fb0d6963f7d28e17f72");
+}
+
+TEST(MD5Test, Deterministic) {
+    const std::string input =
+        "The quick brown fox jumps over the lazy dog";
+
+    const std::string first = md5_hex(input);
+    const std::string second = md5_hex(input);
+
+    EXPECT_EQ(first, second);
+}
+
+TEST(MD5Test, DifferentInputsProduceDifferentHashes) {
+    EXPECT_NE(
+        md5_hex("abc"),
+        md5_hex("abd"));
+}
+
+TEST(MD5Test, Produces32LowercaseHexCharacters) {
+    const std::string digest = md5_hex("test");
+
+    ASSERT_EQ(digest.size(), 32u);
+
+    for (char c : digest) {
+        EXPECT_TRUE(
+            (c >= '0' && c <= '9') ||
+            (c >= 'a' && c <= 'f'))
+            << "Unexpected character: " << c;
+    }
+}
+
+// ============================================================
+// Official Salesforce tests
+// ============================================================
+
+TEST(JA3Test, SalesforceOfficialVector1) {
+    ClientHelloData client{};
+
+    client.client_version = 769;
+
+    client.cipher_suites = {
+        47, 53, 5, 10,
+        49161, 49162, 49171, 49172,
+        50, 56, 19, 4
+    };
+
+    client.extensions = {
+        0, 10, 11
+    };
+
+    client.supported_groups = {
+        23, 24, 25
+    };
+
+    client.ec_point_formats = {
+        0
+    };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "769,47-53-5-10-49161-49162-49171-49172-50-56-19-4,"
+        "0-10-11,23-24-25,0");
+
+    EXPECT_EQ(
+        fp.md5_hash,
+        "ada70206e40642a3e4461f35503241d5");
+}
+
+
+TEST(JA3Test, SalesforceOfficialVector2) {
+    ClientHelloData client{};
+
+    client.client_version = 769;
+
+    client.cipher_suites = {
+        4, 5, 10, 9, 100, 98, 3,
+        6, 19, 18, 99
+    };
+
+    client.extensions = {};
+    client.supported_groups = {};
+    client.ec_point_formats = {};
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "769,4-5-10-9-100-98-3-6-19-18-99,,,");
+
+    EXPECT_EQ(
+        fp.md5_hash,
+        "de350869b8c85de67a350c8d186f11e6");
+}
+
+// ============================================================
+// JA3 formatting tests - source Documentation
+// ============================================================
+
+TEST(JA3Test, EmptyFieldsArePreserved) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+
+    client.cipher_suites = {
+        4865, 4866, 4867
+    };
+
+    client.extensions = {};
+    client.supported_groups = {};
+    client.ec_point_formats = {};
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,4865-4866-4867,,,");
+}
+
+
+TEST(JA3Test, ExtensionOnly) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+
+    client.extensions = {
+        0, 10, 11
+    };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,,0-10-11,,");
+}
+
+
+TEST(JA3Test, SupportedGroupsOnly) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+
+    client.supported_groups = {
+        23, 24, 25
+    };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,,,23-24-25,");
+}
+
+
+TEST(JA3Test, PointFormatsOnly) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+
+    client.ec_point_formats = {
+        0, 1, 2
+    };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,,,,0-1-2");
+}
+
+// ============================================================
+// Ordering tests - source Documentation
+// ============================================================
+
+TEST(JA3Test, CipherOrderIsPreserved) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+    client.cipher_suites = { 1, 2, 3 };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,1-2-3,,,");
+}
+
+
+TEST(JA3Test, ExtensionOrderIsPreserved) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+    client.extensions = { 11, 10, 0 };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,,11-10-0,,");
+}
+
+
+TEST(JA3Test, ChangingOrderChangesFingerprint) {
+    ClientHelloData a{};
+    ClientHelloData b{};
+
+    a.client_version = 771;
+    b.client_version = 771;
+
+    a.cipher_suites = { 1, 2, 3 };
+    b.cipher_suites = { 3, 2, 1 };
+
+    const JA3Fingerprint fp_a = compute_ja3(a);
+    const JA3Fingerprint fp_b = compute_ja3(b);
+
+    EXPECT_NE(fp_a.raw_string, fp_b.raw_string);
+    EXPECT_NE(fp_a.md5_hash, fp_b.md5_hash);
+}
+
+// ============================================================
+// GREASE tests - source Documentation
+// ============================================================
+TEST(JA3Test, GreaseCipherIsIgnored) {
+    ClientHelloData without_grease{};
+    ClientHelloData with_grease{};
+
+    without_grease.client_version = 771;
+    with_grease.client_version = 771;
+
+    without_grease.cipher_suites = {
+        4865, 4866, 4867
+    };
+
+    with_grease.cipher_suites = {
+        0x0a0a,
+        4865,
+        0x1a1a,
+        4866,
+        4867
+    };
+
+    const JA3Fingerprint a =
+        compute_ja3(without_grease);
+
+    const JA3Fingerprint b =
+        compute_ja3(with_grease);
+
+    EXPECT_EQ(a.raw_string, b.raw_string);
+    EXPECT_EQ(a.md5_hash, b.md5_hash);
+}
+
+
+TEST(JA3Test, GreaseExtensionIsIgnored) {
+    ClientHelloData without_grease{};
+    ClientHelloData with_grease{};
+
+    without_grease.client_version = 771;
+    with_grease.client_version = 771;
+
+    without_grease.extensions = {
+        0, 10, 11
+    };
+
+    with_grease.extensions = {
+        0x0a0a,
+        0,
+        0x1a1a,
+        10,
+        11
+    };
+
+    const JA3Fingerprint a =
+        compute_ja3(without_grease);
+
+    const JA3Fingerprint b =
+        compute_ja3(with_grease);
+
+    EXPECT_EQ(a.raw_string, b.raw_string);
+    EXPECT_EQ(a.md5_hash, b.md5_hash);
+}
+
+
+TEST(JA3Test, GreaseSupportedGroupIsIgnored) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+
+    client.supported_groups = {
+        0x0a0a,
+        23,
+        0x1a1a,
+        24
+    };
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,,,23-24,");
+}
+
+
+TEST(JA3Test, GreasePointFormatIsIgnored) {
+    ClientHelloData client{};
+
+    client.client_version = 771;
+
+    client.ec_point_formats = {
+        0x0a,
+        1
+    };
+
+    // This test is NOT a GREASE test.
+    // Point-format values are one-byte values.
+    // Keep it as a normal serialization test.
+
+    const JA3Fingerprint fp = compute_ja3(client);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,,,,10-1");
+}
+// ============================================================
+// JA3S tests tests - source Documentation
+// ============================================================
+TEST(JA3STest, BasicServerHello) {
+    ServerHelloData server{};
+
+    server.server_version = 771;
+    server.selected_cipher = 4865;
+    server.extensions = {
+        43, 51
+    };
+
+    const JA3Fingerprint fp =
+        compute_ja3s(server);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,4865,43-51");
+}
+
+
+TEST(JA3STest, EmptyExtensions) {
+    ServerHelloData server{};
+
+    server.server_version = 771;
+    server.selected_cipher = 4865;
+    server.extensions = {};
+
+    const JA3Fingerprint fp =
+        compute_ja3s(server);
+
+    EXPECT_EQ(
+        fp.raw_string,
+        "771,4865,");
+}
+
+
+TEST(JA3STest, ExtensionOrderingPreserved) {
+    ServerHelloData a{};
+    ServerHelloData b{};
+
+    a.server_version = 771;
+    b.server_version = 771;
+
+    a.selected_cipher = 4865;
+    b.selected_cipher = 4865;
+
+    a.extensions = { 43, 51 };
+    b.extensions = { 51, 43 };
+
+    const JA3Fingerprint fp_a =
+        compute_ja3s(a);
+
+    const JA3Fingerprint fp_b =
+        compute_ja3s(b);
+
+    EXPECT_NE(fp_a.raw_string, fp_b.raw_string);
+    EXPECT_NE(fp_a.md5_hash, fp_b.md5_hash);
+}
+// ============================================================
+// VLAN tests tests
+// ============================================================
+TEST_F(LinkLayerDemuxTest, HandlesSingleVLAN) {
+    ctx.link_type = DLT_EN10MB;
+
+    const std::vector<uint8_t> payload = {
+        0x16, 0x03, 0x01, 0x00, 0x50
+    };
+
+    const auto ip_pkt =
+        build_ip_tcp_payload(payload);
+
+    // Ethernet + 802.1Q + IPv4/TCP.
+    std::vector<uint8_t> pkt(
+        14 + 4 + ip_pkt.size(), 0);
+
+    // EtherType = 802.1Q.
+    pkt[12] = 0x81;
+    pkt[13] = 0x00;
+
+    // VLAN TCI.
+    pkt[14] = 0x00;
+    pkt[15] = 0x01;
+
+    // Inner EtherType = IPv4.
+    pkt[16] = 0x08;
+    pkt[17] = 0x00;
+
+    std::memcpy(
+        pkt.data() + 18,
+        ip_pkt.data(),
+        ip_pkt.size());
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 1u);
+}
+
+TEST_F(LinkLayerDemuxTest, HandlesDoubleVLAN) {
+    ctx.link_type = DLT_EN10MB;
+
+    const std::vector<uint8_t> payload = {
+        0x16, 0x03, 0x01, 0x00, 0x50
+    };
+
+    const auto ip_pkt =
+        build_ip_tcp_payload(payload);
+
+    std::vector<uint8_t> pkt(
+        14 + 8 + ip_pkt.size(), 0);
+
+    // Outer 802.1ad.
+    pkt[12] = 0x88;
+    pkt[13] = 0xa8;
+
+    // Outer VLAN TCI.
+    pkt[14] = 0x00;
+    pkt[15] = 0x01;
+
+    // Inner 802.1Q.
+    pkt[16] = 0x81;
+    pkt[17] = 0x00;
+
+    // Inner VLAN TCI.
+    pkt[18] = 0x00;
+    pkt[19] = 0x02;
+
+    // IPv4.
+    pkt[20] = 0x08;
+    pkt[21] = 0x00;
+
+    std::memcpy(
+        pkt.data() + 22,
+        ip_pkt.data(),
+        ip_pkt.size());
+
+    inject_packet(pkt);
+
+    EXPECT_EQ(ctx.active_flows.size(), 1u);
 }
