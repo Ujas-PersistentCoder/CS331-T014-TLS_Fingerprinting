@@ -41,7 +41,7 @@ Offset  Size  Field
 5..     var   Fragment payload
 ```
 
-We only care about records with Content Type `22`. Everything else (most commonly ChangeCipherSpec, which persists as a TLS 1.3 "middlebox compatibility" artifact even though it's cryptographically meaningless in 1.3) must be **skipped, not dropped** — the stream continues, and a Handshake record can immediately follow.
+We only care about records with Content Type `22`. Non-handshake records are ignored for ClientHello/ServerHello extraction, but their bytes must still be consumed so that stream parsing can continue.
 
 ### 2.2 The Handshake Layer
 
@@ -98,7 +98,7 @@ Offset       Field                         JA3S Field?
 ...          Extensions                    Field 3
 ```
 
-Asymmetry worth noting in the report: the `supported_versions` extension (`0x002b`) is a **list** in ClientHello but exactly **2 bytes** (the single negotiated version) in ServerHello. Our parsers handle each side with dedicated logic rather than one shared extension-parsing routine, because the two are not the same wire format despite sharing an extension type code.
+The `supported_versions` extension (`0x002b`) is a list in ClientHello but exactly **2 bytes** (the single negotiated version) in ServerHello. Our parsers handle each side with dedicated logic rather than one shared extension-parsing routine, because the two are not the same wire format despite sharing an extension type code.
 
 ### 2.5 GREASE (RFC 8701)
 
@@ -110,7 +110,7 @@ Clients (Chrome-family browsers especially) insert meaningless placeholder value
 
 **JA3S**: `TLSVersion,SelectedCipher,Extensions` → MD5.
 
-**JA4**: A structured 3-part string — a human-readable 10-char prefix (protocol/version/SNI-flag/counts/ALPN) plus two truncated-SHA256 hashes, one over _sorted_ ciphers and one over _sorted_ extensions concatenated with _wire-order_ signature algorithms. The sort is the deliberate fix for browser randomization (§6 below).
+**JA4**: A structured 3-part string — a human-readable 10-char prefix (protocol/version/SNI-flag/counts/ALPN) plus two truncated-SHA256 hashes, one over sorted ciphers and one over sorted extensions concatenated with *wire-order* signature algorithms. The sort is the deliberate fix for browser randomization.
 
 **JA4S**: Same idea, 7-char prefix, raw 4-hex-digit selected cipher (not hashed — there's only one value, nothing to sort), and a sorted-extension hash.
 
@@ -205,36 +205,35 @@ Methodology: both engines were benchmarked on the same PCAP set, 30 runs each wi
 
 ### 6.1 Role in Security Monitoring
 
-TLS fingerprinting's value comes from one fact: the encrypted payload tells you nothing, but the _handshake construction_ is a near-invariant of the client's TLS library, independent of the application layer riding on top of it. Two dominant defensive uses:
+TLS fingerprinting's value comes from the fact that the encrypted payload tells you nothing, but the *handshake construction* is a near-invariant of the client's TLS library, independent of the application layer on top of it. We mention two dominant defensive uses:
 
-- **C2 / malware beacon detection.** Malware authors rarely bother randomizing their TLS stack's handshake shape. A hardcoded Go `crypto/tls` client, a custom OpenSSL build, or a known beacon framework (Cobalt Strike, IcedID, Sliver — all present in our seed database via the FoxIO JA4+ mapping import) produces a JA3/JA4 hash that is rare or previously catalogued as malicious. This gives a decryption-free indicator-of-compromise: a firewall log line alone, with no payload inspection, can say "this outbound connection's TLS handshake matches a known Cobalt Strike beacon" — Redis-backed lookup against our curated + FoxIO-imported catalog does exactly this.
-- **Client identification / policy enforcement.** JA3/JA3S pairs distinguish curl from a browser from a scripted bot hitting an endpoint, even when the User-Agent header lies. This is useful for bot detection and for catching traffic that _claims_ to be Chrome via its User-Agent but whose TLS stack doesn't match any known Chrome build — a mismatch between the application-layer claim and the transport-layer fingerprint is itself a signal.
+- **C2 / malware beacon detection.** Malware authors rarely bother randomizing their TLS stack's handshake shape. A hardcoded Go `crypto/tls` client, a custom OpenSSL build, or a known beacon framework (Cobalt Strike, IcedID, Sliver, all of which are present in our seed database via the FoxIO JA4+ mapping import) produces a JA3/JA4 hash that is rare or previously catalogued as malicious. This gives a decryption-free indicator-of-compromise: a firewall log line alone, with no payload inspection, can say "this outbound connection's TLS handshake matches a known Cobalt Strike beacon". Redis-backed lookup against our curated + FoxIO-imported catalog does exactly this.
+- **Client identification / policy enforcement.** JA3/JA3S pairs distinguish curl from a browser or a scripted bot hitting an endpoint, even when the User-Agent header lies. This is useful for bot detection and for catching traffic that *claims* to be Chrome via its User-Agent, but whose TLS stack doesn't match any known Chrome build.
 
 ### 6.2 Limitations
 
-**(a) Structural, not semantic, matching.** JA3/JA4 don't understand _what_ a cipher suite is — only its position in an ordered list. This is precisely what makes it library-agnostic, but it also means the fingerprint is trivially reproducible by anyone who controls handshake construction.
+**(a) Structural, not semantic, matching.** JA3/JA4 don't understand what a cipher suite is, only its position in an ordered list. This is precisely what makes it library-agnostic, but it also means the fingerprint is trivially reproducible by anyone who controls handshake construction.
 
-**(b) Extension order randomization defeats JA3 — demonstrated in our own captures.** Starting with Chrome 107+, Chromium deliberately randomizes ClientHello extension _order_ per connection (not just GREASE insertion) specifically to resist fingerprinting. Our own seed database shows this directly: three separate JA3 hashes (`d1256e71...`, `61f4b05e...`, and others) all correspond to the _same physical Chrome build_ across different capture sessions — the same browser produces a different JA3 hash every time it connects. This is strictly worse than GREASE noise, because GREASE is deterministically filtered out before hashing, while extension permutation changes the actual ordered field JA3 hashes over. This single finding _is_ JA4's entire reason for existing: JA4 sorts cipher suites and extensions before hashing specifically to neutralize this, at the cost of discarding positional information that could theoretically distinguish two otherwise-identical clients configured differently — we do not have evidence this cost matters in practice, but it is the honest trade-off being made.
+**(b) Extension order randomization defeats JA3 — demonstrated in our own captures.** Starting with Chrome 107+, Chromium deliberately randomizes ClientHello extension order per connection (not just GREASE insertion) specifically to resist fingerprinting. Our own seed database shows this directly: multiple separate JA3 hashes (`d1256e71...`, `61f4b05e...`, and others) all correspond to the same physical Chrome build across different capture sessions. The same browser produces a different JA3 hash every time it connects. This is strictly worse than GREASE noise, because GREASE is deterministically filtered out before hashing, while extension permutation changes the actual ordered field JA3 hashes over. This single finding is JA4's entire reason for existing. JA4 sorts cipher suites and extensions before hashing specifically to neutralize this, at the cost of discarding positional information that could theoretically distinguish two otherwise-identical clients configured differently — we do not have evidence this cost matters in practice, but it is the honest trade-off being made.
 
-**(c) Evasion is a solved engineering problem for a motivated adversary.** Tools like `curl-impersonate` (present in our capture manifest) and TLS libraries like Go's `utls` exist specifically to clone a target browser's JA3/JA4 exactly, byte for byte. Fingerprinting raises the cost of blending in slightly; it does not defeat a targeted adversary who fingerprint-matches on purpose. The honest framing: **JA3/JA4 are population-level heuristics effective against unsophisticated or unmodified malware and misconfigured clients, not a cryptographic identity mechanism.**
+**(c) Evasion is a solved engineering problem for a motivated adversary.** Tools like `curl-impersonate` (present in our capture manifest) and TLS libraries like Go's `utls` exist specifically to clone a target browser's JA3/JA4 exactly, byte for byte. Fingerprinting raises the cost of blending in slightly; it does not defeat a targeted adversary who fingerprint-matches on purpose. JA3/JA4 are population-level heuristics effective against unsophisticated or unmodified malware and misconfigured clients, not a cryptographic identity mechanism.
 
-**(d) Collision at the population level.** Many unrelated hosts running the same default library build (e.g., every unmodified Go binary using `net/http`'s default TLS config) collapse to an identical JA3/JA4 hash. A match is evidence about _software_, not about an individual actor — this is visible directly in our own legacy `fingerprints.json`, where single hashes map to comma-separated lists of multiple unrelated applications (e.g. one hash maps to `"Charles,Google Play Music Desktop Player,Postman,Slack,and other desktop programs"`).
+**(d) Collision at the population level.** Many unrelated hosts running the same default library build (e.g., every unmodified Go binary using `net/http`'s default TLS config) collapse to an identical JA3/JA4 hash. A match is evidence about software, not about an individual actor — this is visible directly in our own legacy `fingerprints.json`, where single hashes map to comma-separated lists of multiple unrelated applications (e.g. one hash maps to `"Charles,Google Play Music Desktop Player,Postman,Slack,and other desktop programs"`).
 
 **(e) Post-handshake blindness.** Fingerprinting only sees the plaintext handshake. TLS 1.3 additionally moves the Certificate and other post-ServerHello messages behind encryption, shrinking the available metadata surface further relative to TLS 1.2. A future Encrypted Client Hello (ECH) deployment would eliminate passive ClientHello fingerprinting entirely.
 
-**(f) Engineering-scope limitations of this specific implementation** (as opposed to the technique in general):
+**(f) Engineering-scope limitations of this specific implementation**:
 
-- The **C++ engine is POSIX-only**, since it depends directly on `libpcap`. It will not build or run on Windows without swapping in Npcap/WinPcap-compatible headers and adjusting the socket/signal-handling code, which is POSIX-specific (`sigaction`, `getaddrinfo`, raw sockets for the Redis RESP client). The Python engine, using `dpkt` and `scapy`, is cross-platform by comparison (modulo live-capture privilege requirements on any OS).
-- Our **reference database only covers a bounded, curated set of clients** — the clients we deliberately captured (curl variants, major browsers headless, Python `requests`/`ssl`, a handful of language runtimes) plus whatever the Salesforce community CSV and FoxIO JA4+ mapping already catalogued. Any client outside that set returns "Unknown," not a wrong answer, but a coverage gap: the tool's identification power is bounded by database size, not algorithmic capability, and a production deployment would need continuous ingestion from much larger community/threat-intel feeds to be useful at scale.
+- The **C++ engine is POSIX-only**, since it depends directly on `libpcap`. It will not build or run on Windows without swapping in Npcap/WinPcap-compatible headers and adjusting the socket/signal-handling code, which is POSIX-specific. The Python engine, using `dpkt` and `scapy`, is cross-platform by comparison (modulo live-capture privilege requirements on any OS).
+- Our **reference database only covers a bounded, curated set of clients** — the clients we deliberately captured (curl variants, major browsers headless, Python `requests`/`ssl`, a handful of language runtimes) plus whatever the Salesforce community CSV and FoxIO JA4+ mapping already catalogued. Any client outside that set returns "Unknown".
 
 ---
 
 ## 7. Future Scope
 
-- **Combine client and server fingerprints for stronger detection.** A JA3+JA3S (or JA4+JA4S) _pair_, keyed to a specific flow, is more identifying than either half alone — e.g., a known-malicious client fingerprint talking to a specific, unusual server fingerprint (a non-standard C2 server stack) is a much stronger signal than the client hash by itself, since it also captures the _infrastructure_ side of a malware campaign, not just the implant. This is a natural extension of our existing per-flow database schema (`FingerprintRecord` already keys by `kind` including both `ja3`/`ja3s` and `ja4`/`ja4s`) — the join would just need to happen at the flow level rather than independently per message.
+- **Combine client and server fingerprints for stronger detection.** A JA3+JA3S (or JA4+JA4S) pair, which is the key to a specific flow, is more identifying than either half alone — e.g., a known-malicious client fingerprint talking to a specific, unusual server fingerprint is a much stronger signal than the client hash by itself. This is a natural extension of our existing database schema.
 - **JA4-family completion**: JA4L (latency), JA4H (HTTP), JA4X (X.509 certificate fingerprinting) extend the same idea to other protocol layers; only JA4/JA4S (TLS) were in scope here.
-- **Encrypted Client Hello (ECH) awareness**: detect ECH usage itself as a signal (a client using ECH is, definitionally, trying to prevent fingerprinting), even though the inner ClientHello becomes unreadable.
-- **Larger, continuously updated reference database**: ingest broader community/threat-intel feeds (e.g. full `ja3er.com` dumps, live FoxIO JA4+ updates) rather than our current bounded manifest, to reduce the "Unknown" rate documented in §6.2(f).
+- **Larger, continuously updated reference database**: ingest broader community/threat-intel feeds (e.g. full `ja3er.com` dumps, live FoxIO JA4+ updates) rather than just labeling unencountered records as "Unknown".
 - **Cross-platform C++ engine**: abstract the libpcap-specific and POSIX-specific (`sigaction`, raw socket RESP client) code behind a platform layer to support Windows via Npcap.
 - **Statistical/ML-based fingerprint clustering**: rather than exact-hash lookup, cluster near-identical fingerprints (e.g. same client, different TLS library minor version) to reduce false "Unknown" classifications from minor version drift.
 
@@ -247,5 +246,3 @@ TLS fingerprinting's value comes from one fact: the encrypted payload tells you 
 5. **Brotherston, J. (FoxIO, 2023):** *JA4+ Network Fingerprinting Suite.* GitHub: `FoxIO-LLC/ja4`.
 
 ---
-
-_Draft — sections, ordering, and framing subject to revision. Byte offsets and code line references throughout are drawn directly from `parser.py`/`parser.cpp`, `capture.py`/`capture.cpp`, and `ja3.py`/`ja4.py`/`ja3.cpp`/`ja4.cpp`._
