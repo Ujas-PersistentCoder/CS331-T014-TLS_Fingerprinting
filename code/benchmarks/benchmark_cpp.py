@@ -14,8 +14,6 @@ RESULTS = ROOT / "code" / "benchmarks" / "results" / "cpp_results.csv"
 
 
 PCAPS = [
-    "test_reassembly.pcap",
-    "captured_handshakes.pcap",
     "cloudflare_run1.pcap",
     "curl.pcap",
     "python_requests.pcap",

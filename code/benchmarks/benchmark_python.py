@@ -32,8 +32,6 @@ from src.ja4 import compute_ja4_string, compute_ja4s_string
 
 # Keep this list identical to benchmark_cpp.py's PCAPS for a fair comparison.
 PCAPS = [
-    "test_reassembly.pcap",
-    "captured_handshakes.pcap",
     "cloudflare_run1.pcap",
     "curl.pcap",
     "python_requests.pcap",
