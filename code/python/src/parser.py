@@ -23,6 +23,7 @@ class ServerHelloFields:
     extensions: tuple[int, ...]          # Extension type codes, wire order
     # Field for JA4S (future):
     supported_version: int | None = None
+    alpn: str | None = None
 
 
 def parse_tls_record(data: bytes, offset: int = 0) -> tuple[int, int, bytes, int]:
@@ -187,7 +188,7 @@ def parse_client_hello(data: bytes) -> ClientHelloFields:
                         s_len = ext_data[p]
                         p += 1
                         if p + s_len <= end:
-                            alpn_str = ext_data[p:p+s_len].decode('utf-8', errors='ignore')
+                            alpn_str = ext_data[p:p+s_len].decode('latin-1')
                             alpn.append(alpn_str)
                         p += s_len
                         
@@ -273,11 +274,27 @@ def parse_server_hello(data: bytes) -> ServerHelloFields:
                 if len(ext_data) >= 2:
                     supported_version = struct.unpack('!H', ext_data[0:2])[0]
                     
+            elif ext_type == 0x0010: # ALPN (16)
+                if len(ext_data) >= 2:
+                    alpn_len = struct.unpack('!H', ext_data[0:2])[0]
+                    end = min(len(ext_data), 2 + alpn_len)
+                    p = 2
+                    while p < end:
+                        s_len = ext_data[p]
+                        p += 1
+                        if p + s_len <= end:
+                            # ServerHello always contains exactly one ALPN protocol
+                            # We use latin-1 to preserve any GREASE values
+                            alpn = ext_data[p:p+s_len].decode('latin-1')
+                            break # stop after first
+                        p += s_len
+                        
             offset += ext_len
 
     return ServerHelloFields(
         tls_version=tls_version,
         cipher_suite=cipher_suite,
         extensions=tuple(extensions),
-        supported_version=supported_version
+        supported_version=supported_version,
+        alpn=alpn if 'alpn' in locals() else None
     )

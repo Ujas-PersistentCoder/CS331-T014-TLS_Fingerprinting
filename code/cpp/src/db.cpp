@@ -413,7 +413,11 @@ bool FingerprintDatabase::store(const FingerprintRecord &record) {
 									"category", record.category,
 									"source", record.source,
 									"notes", record.notes}, reply);
-	return sent && reply.type != '-';
+	if (!sent || reply.type == '-') return false;
+	const std::string cache_key = redis_key(record.kind, record.hash);
+	cache_[cache_key] = record;
+	missing_cache_.erase(cache_key);
+	return true;
 }
 
 bool FingerprintDatabase::enroll(FingerprintKind kind, const std::string &hash,
@@ -432,15 +436,29 @@ bool FingerprintDatabase::enroll(FingerprintKind kind, const std::string &hash,
 bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
 								 FingerprintRecord &record) {
 	if (hash.empty() || !is_connected()) return false;
+	const std::string key = redis_key(kind, hash);
+	const auto cached = cache_.find(key);
+	if (cached != cache_.end()) {
+		record = cached->second;
+		return true;
+	}
+	if (missing_cache_.find(key) != missing_cache_.end()) return false;
+
 	RedisValue reply;
-	if (!send_command({"HGETALL", redis_key(kind, hash)}, reply) || reply.type != '*') return false;
-	if (reply.items.empty()) return false;
+	if (!send_command({"HGETALL", key}, reply) || reply.type != '*') return false;
+	if (reply.items.empty()) {
+		missing_cache_.insert(key);
+		return false;
+	}
 
 	std::map<std::string, std::string> fields;
 	for (std::size_t index = 0; index + 1 < reply.items.size(); index += 2) {
 		fields[reply.items[index].text] = reply.items[index + 1].text;
 	}
-	if (fields.empty()) return false;
+	if (fields.empty()) {
+		missing_cache_.insert(key);
+		return false;
+	}
 
 	record.kind = kind;
 	record.hash = fields["hash"];
@@ -451,7 +469,12 @@ bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
 	record.category = fields["category"];
 	record.source = fields["source"];
 	record.notes = fields["notes"];
-	return !record.hash.empty();
+	if (record.hash.empty()) {
+		missing_cache_.insert(key);
+		return false;
+	}
+	cache_[key] = record;
+	return true;
 }
 
 std::size_t FingerprintDatabase::load_seed_files(const std::string &seed_path,

@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.capture import read_pcap, CaptureStats
 from src.ja3 import compute_ja3_string, compute_ja3_hash, compute_ja3s_string, compute_ja3s_hash
+from src.ja4 import (
+    compute_ja4_string, compute_ja4_b_raw, compute_ja4_c_raw,
+    compute_ja4s_string, compute_ja4s_c_raw
+)
 from src.db import FingerprintDB
 
 
@@ -55,6 +59,9 @@ def main():
                 ja3_hash = compute_ja3_hash(ch)
                 match = db.lookup(ja3_hash, "ja3")
 
+                ja4_str = compute_ja4_string(ch)
+                ja4_match = db.lookup(ja4_str, "ja4")
+
                 print(f"[ClientHello] {result.src_ip}:{result.src_port}"
                       f" -> {result.dst_ip}:{result.dst_port}")
                 if ch.server_name:
@@ -65,6 +72,10 @@ def main():
                     print(f"  Match:   {match} (from DB)")
                 else:
                     print("  Match:   Unknown")
+
+                print(f"  JA4:     {ja4_str}")
+                if ja4_match:
+                    print(f"  JA4 Match: {ja4_match} (from DB)")
 
                 if args.verbose:
                     print(f"  Version:    {ch.tls_version} (0x{ch.tls_version:04x})")
@@ -77,6 +88,9 @@ def main():
                     if ch.supported_versions:
                         print(f"  Sup. Vers:  "
                               f"{', '.join(f'0x{v:04x}' for v in ch.supported_versions)}")
+                    
+                    print(f"  JA4_b raw:  {compute_ja4_b_raw(ch)}")
+                    print(f"  JA4_c raw:  {compute_ja4_c_raw(ch)}")
 
                 print()
 
@@ -86,12 +100,19 @@ def main():
                 ja3s_hash = compute_ja3s_hash(sh)
                 match = db.lookup(ja3s_hash, "ja3s")
 
+                ja4s_str = compute_ja4s_string(sh)
+                ja4s_match = db.lookup(ja4s_str, "ja4s")
+
                 print(f"[ServerHello] {result.src_ip}:{result.src_port}"
                       f" -> {result.dst_ip}:{result.dst_port}")
                 print(f"  JA3S:     {ja3s_hash}")
                 print(f"  JA3S raw: {ja3s_raw}")
                 if match:
                     print(f"  Match:   {match} (from DB)")
+                
+                print(f"  JA4S:    {ja4s_str}")
+                if ja4s_match:
+                    print(f"  JA4S Match: {ja4s_match} (from DB)")
 
                 if args.verbose:
                     print(f"  Version:    {sh.tls_version} (0x{sh.tls_version:04x})")
@@ -99,6 +120,8 @@ def main():
                     print(f"  Extensions: {', '.join(str(e) for e in sh.extensions)}")
                     if sh.supported_version:
                         print(f"  Sup. Ver:   0x{sh.supported_version:04x}")
+                    
+                    print(f"  JA4S_c raw: {compute_ja4s_c_raw(sh)}")
 
                 print()
 

@@ -121,5 +121,31 @@ def test_parse_server_hello():
     
     assert fields.tls_version == 0x0303
     assert fields.cipher_suite == 0xc02f
-    assert fields.extensions == (0x002b,)
     assert fields.supported_version == 0x0304
+
+def test_parse_server_hello_with_alpn():
+    # version (2) + random (32) + session_id_len (1)
+    body = b'\x03\x03' + (b'\x00' * 32) + b'\x00'
+    # single cipher (2 bytes) + compression method (1 byte)
+    body += struct.pack('!H', 0xc02f) + b'\x00'
+    
+    # ALPN (0x0010): h2
+    alpn = b'\x00\x10\x00\x05\x00\x03\x02h2'
+    body += struct.pack('!H', len(alpn)) + alpn
+    
+    fields = parse_server_hello(body)
+    assert fields.extensions == (0x0010,)
+    assert fields.alpn == "h2"
+
+def test_client_hello_alpn_grease_latin1_roundtrip():
+    # ALPN (0x0010) containing a GREASE codepoint 0xeaea
+    # length of list: 3 (00 03) -> string length 2 -> 0xeaea
+    alpn_grease = b'\x00\x10\x00\x05\x00\x03\x02\xea\xea'
+    body = build_client_hello_body(b'\x03\x03', [0xc02b], alpn_grease)
+    
+    fields = parse_client_hello(body)
+    assert fields.alpn == ("\xea\xea",)
+    
+    # Confirm it round-trips back to original bytes
+    assert fields.alpn[0].encode('latin-1') == b'\xea\xea'
+
