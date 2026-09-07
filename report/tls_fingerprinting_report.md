@@ -8,11 +8,11 @@
 
 ### 1.1 What is TLS Fingerprinting
 
-TLS encrypts application data, but it cannot encrypt the negotiation that sets up that encryption. Before a client and server agree on a shared secret, they exchange two plaintext messages — the `ClientHello` and the `ServerHello` — that list, in the clear, which protocol versions, cipher suites, extensions, elliptic curves, and point formats each side is willing to use. A passive observer sitting anywhere on the network path can read these fields without possessing any keys, without performing a man-in-the-middle attack, and without violating the confidentiality guarantees of TLS at all.
+TLS encrypts application data, but it cannot encrypt the negotiation that sets up that encryption. Before a client and server agree on a shared secret, they exchange two plaintext messages — the `ClientHello` and the `ServerHello` — that clearly list which protocol versions, cipher suites, extensions, elliptic curves, and point formats each side is willing to use. A passive observer sitting anywhere on the network path can read these fields without possessing any keys, without performing a man-in-the-middle attack, and without violating the confidentiality guarantees of TLS at all.
 
-**TLS fingerprinting** is the practice of taking these plaintext fields, arranging them in a canonical order, and hashing them into a short, stable identifier. Because different TLS *implementations* (not different users) construct their ClientHello differently — Chrome's list of ciphers is not curl's, which is not Python's `ssl` module's, which is not a Go binary's — this hash acts as a signature for the software stack generating the traffic, entirely independent of IP address, User-Agent header, or any other application-layer signal.
+**TLS fingerprinting** is the practice of taking these plaintext fields, arranging them in a canonical order, and hashing them into a short, stable identifier. Because different TLS *implementations* (not different users) construct their ClientHello differently — Chrome's list of ciphers is not the same as curl's, neither Python's `ssl` module's, nor a Go binary's. This hash acts as a signature for the software stack generating the traffic, entirely independent of IP address, User-Agent header, or any other application-layer signal.
 
-This project implements two such fingerprinting schemes end-to-end, in two languages, against both offline PCAP files and live traffic:
+This project implements two such fingerprinting schemes in two languages, against both offline PCAP files and live traffic:
 
 - **JA3 / JA3S** (Salesforce, 2017) — the original, MD5-based specification.
   - Reference repository: [**salesforce/ja3**](https://github.com/salesforce/ja3)
@@ -21,11 +21,11 @@ This project implements two such fingerprinting schemes end-to-end, in two langu
 
 ### 1.2 Why This Matters
 
-The deliverable is not "a tool that prints a hash." It is a demonstration of the entire TLS handshake at the byte level: TCP segment reassembly, TLS record framing, handshake message framing, and the TLV (Type-Length-Value) structure of the ClientHello/ServerHello bodies — followed by a security-relevant application (client/malware identification) built on top of that understanding.
+Instead of being a simple tool to print hashes, the engine is a demonstration of the entire TLS handshake at the byte level: TCP segment reassembly, TLS record framing, handshake message framing and the TLV (Type-Length-Value) structure of the ClientHello/ServerHello bodies.
 
 ---
 
-## 2. Theory: How TLS Fingerprinting Works, Byte by Byte
+## 2. Theory: How TLS Fingerprinting Works
 
 This section is deliberately mechanical. Every claim below maps to a specific byte offset our parsers rely on.
 
