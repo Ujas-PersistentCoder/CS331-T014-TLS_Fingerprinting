@@ -1,4 +1,5 @@
 # Project 11: TLS Fingerprinting
+
 **CS 331 Computer Networks — Team T014**
 
 ---
@@ -14,7 +15,9 @@ TLS encrypts application data, but it cannot encrypt the negotiation that sets u
 This project implements two such fingerprinting schemes end-to-end, in two languages, against both offline PCAP files and live traffic:
 
 - **JA3 / JA3S** (Salesforce, 2017) — the original, MD5-based specification.
-- **JA4 / JA4S** (FoxIO) — a newer specification addressing JA3's instability against modern browser randomization (stretch goal for this project).
+  - Reference repository: [**salesforce/ja3**](https://github.com/salesforce/ja3)
+- **JA4 / JA4S** (FoxIO) — a newer specification addressing JA3's instability against modern browser randomization.
+  - Reference repository: [**FoxIO-LLC/ja4**](https://github.com/FoxIO-LLC/ja4)
 
 ### 1.2 Why This Matters
 
@@ -70,14 +73,15 @@ Offset            Field                     JA3 Field?
 
 Extensions are themselves nested TLV structures. The ones we parse:
 
-| Ext Type | Name | Contribution |
-|---|---|---|
-| `0x0000` | SNI | Hostname (for display / JA4's `d`/`i` indicator) |
-| `0x000a` | Supported Groups | JA3 Field 4 (elliptic curves) |
-| `0x000b` | EC Point Formats | JA3 Field 5 |
-| `0x000d` | Signature Algorithms | JA4_c wire-order tail |
-| `0x0010` | ALPN | JA4_a first+last char |
-| `0x002b` | Supported Versions | JA4's real version source |
+
+| Ext Type | Name                 | Contribution                                    |
+| -------- | -------------------- | ----------------------------------------------- |
+| `0x0000` | SNI                  | Hostname (for display / JA4's`d`/`i` indicator) |
+| `0x000a` | Supported Groups     | JA3 Field 4 (elliptic curves)                   |
+| `0x000b` | EC Point Formats     | JA3 Field 5                                     |
+| `0x000d` | Signature Algorithms | JA4_c wire-order tail                           |
+| `0x0010` | ALPN                 | JA4_a first+last char                           |
+| `0x002b` | Supported Versions   | JA4's real version source                       |
 
 **Key subtlety exploited by our parser:** in TLS 1.3, `client_version` is deliberately frozen at `0x0303` (RFC 8446 §4.1.2, middlebox compatibility). The *actual* max version a client supports lives only inside the `supported_versions` extension. JA3 does not care about this — it hashes the frozen body version anyway (a documented JA3 limitation). JA4 explicitly prefers `supported_versions` and falls back to the body version only if the extension is absent.
 
@@ -117,7 +121,7 @@ Clients (Chrome-family browsers especially) insert meaningless placeholder value
 
 We built two independent, cross-validated engines against a shared ground truth (`pcaps/`, `reference/`, `db/`), rather than porting one implementation into a second language. JA3 was treated as the literal deliverable; JA4/JA4S as the stretch goal, since JA3's field set is a strict subset of what JA4 requires (cipher list, extension list, signature algorithms, ALPN, supported versions — parsing all of it up front cost nothing extra once we were already walking the extension TLV chain).
 
-### 3.1 Why dpkt over Scapy (Python)
+### 3.1 Why `dpkt` over `scapy` (Python)
 
 This is the one place we changed course mid-project, and it's worth documenting honestly because it's directly about what the assignment is grading.
 
@@ -152,20 +156,21 @@ Most of the remaining pipeline is a faithful reproduction of a well-specified, e
 
 ## 4. Implementation: Python vs. C++ Engines
 
-| Aspect | Python | C++ |
-|---|---|---|
-| Entry point | `main.py` (argparse: `pcap`, `live`) | `main.cpp` (POSIX `getopt`: `-r`, `-i`, `-q`, `-v`) |
-| Processing model | Generator (`yield`) | libpcap callback (`pcap_loop`) |
-| Offline parsing | `dpkt` | `libpcap` (`pcap_open_offline`) |
-| Live capture | `scapy` (packet delivery only) | `libpcap` (`pcap_open_live`) |
-| TLS parsing | `struct.unpack`, modular functions | Custom `ByteReader`, inlined |
-| Reassembly | Full OOO-capable `TCPReassembler`: buffers out-of-order segments, trims partial overlaps, tracks flow lifecycle (SYN→ESTABLISHED→CLOSED), cross-record handshake reassembly via `pending_handshake` | Minimal contiguous-only `StreamBuffer` (4096B fixed): **drops the entire flow** on any out-of-order segment or buffer overflow, using RFC 1982 modular sequence arithmetic |
-| GREASE filtering | Post-parse (at fingerprint computation) | During parse (never stored) |
-| Hashing | `hashlib` (MD5, SHA-256) | OpenSSL EVP, thread-local reusable context |
-| Database | `redis-py` + JSON fallback, pipelined bulk seeding | Custom raw RESP-over-socket client (~300 LOC), no library dependency |
-| GUI | PyQt6 (`code/gui/`) | None |
-| Benchmark mode | None | `-q`: suppresses all I/O and Redis, reports raw throughput |
-| Platform | Cross-platform | **POSIX-only** (libpcap; see Limitations) |
+
+| Aspect           | Python                                                                                                                                                                                               | C++                                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entry point      | `main.py` (argparse: `pcap`, `live`)                                                                                                                                                                 | `main.cpp` (POSIX `getopt`: `-r`, `-i`, `-q`, `-v`)                                                                                                                       |
+| Processing model | Generator (`yield`)                                                                                                                                                                                  | libpcap callback (`pcap_loop`)                                                                                                                                            |
+| Offline parsing  | `dpkt`                                                                                                                                                                                               | `libpcap` (`pcap_open_offline`)                                                                                                                                           |
+| Live capture     | `scapy` (packet delivery only)                                                                                                                                                                       | `libpcap` (`pcap_open_live`)                                                                                                                                              |
+| TLS parsing      | `struct.unpack`, modular functions                                                                                                                                                                   | Custom`ByteReader`, inlined                                                                                                                                               |
+| Reassembly       | Full OOO-capable`TCPReassembler`: buffers out-of-order segments, trims partial overlaps, tracks flow lifecycle (SYN→ESTABLISHED→CLOSED), cross-record handshake reassembly via `pending_handshake` | Minimal contiguous-only`StreamBuffer` (4096B fixed): **drops the entire flow** on any out-of-order segment or buffer overflow, using RFC 1982 modular sequence arithmetic |
+| GREASE filtering | Post-parse (at fingerprint computation)                                                                                                                                                              | During parse (never stored)                                                                                                                                               |
+| Hashing          | `hashlib` (MD5, SHA-256)                                                                                                                                                                             | OpenSSL EVP, thread-local reusable context                                                                                                                                |
+| Database         | `redis-py` + JSON fallback, pipelined bulk seeding                                                                                                                                                   | Custom raw RESP-over-socket client (~300 LOC), no library dependency                                                                                                      |
+| GUI              | PyQt6 (`code/gui/`)                                                                                                                                                                                  | None                                                                                                                                                                      |
+| Benchmark mode   | None                                                                                                                                                                                                 | `-q`: suppresses all I/O and Redis, reports raw throughput                                                                                                                |
+| Platform         | Cross-platform                                                                                                                                                                                       | **POSIX-only** (libpcap; see Limitations)                                                                                                                                 |
 
 ### 4.1 Subjective Comparison
 
@@ -179,17 +184,18 @@ Neither is "better" in the abstract — they optimize for different things. Pyth
 
 Methodology: both engines were benchmarked on the same PCAP set, 30 runs each with 3 warm-up runs discarded. "Engine time" measures only the parse + reassemble + fingerprint loop (no interpreter startup, no Redis/DB — DB cost is deliberately excluded from both, per team decision, since it would conflate network-store overhead with actual engine performance). Correctness was verified per-run by requiring identical `(packets, client_hellos, server_hellos)` counts across all 30 runs of a given engine.
 
-| PCAP | C++ pkts | Py pkts | C++ median (ms) | Py median (ms) | C++ throughput | Py throughput | Speedup | Handshakes match? |
-|---|---|---|---|---|---|---|---|---|
-| test_reassembly.pcap | 10 | 10 | 0.714 | 0.691 | 14.0 k/s | 14.5 k/s | 1.0× | ✅ |
-| captured_handshakes.pcap | 75 | 75 | 0.702 | 1.325 | 106.9 k/s | 56.6 k/s | 1.9× | ✅ |
-| cloudflare_run1.pcap | 2655 | 1877 | 1.134 | 20.114 | 2.34 M/s | 93.3 k/s | 17.7× | ✅ |
-| curl.pcap | 1208 | 938 | 0.877 | 8.393 | 1.38 M/s | 111.8 k/s | 9.6× | ✅ |
-| python_requests.pcap | 356 | 223 | 0.701 | 2.596 | 508.1 k/s | 85.9 k/s | 3.7× | ✅ |
-| custom_client.pcap | 133 | 105 | 0.665 | 1.290 | 200.0 k/s | 81.4 k/s | 1.9× | ✅ |
-| chrome.pcap | 630 | 353 | 0.742 | 4.526 | 849.6 k/s | 78.0 k/s | 6.1× | ✅ |
-| chrome_run2.pcap | 591 | 352 | 0.729 | 4.310 | 811.0 k/s | 81.7 k/s | 5.9× | ✅ |
-| cloudflare_x100.pcap (265.5K pkts) | 265500 | 187700 | 68.446 | 2263.848 | 3.88 M/s | 82.9 k/s | 33.1× | ❌ |
+
+| PCAP                               | C++ pkts | Py pkts | C++ median (ms) | Py median (ms) | C++ throughput | Py throughput | Speedup | Handshakes match? |
+| ---------------------------------- | -------- | ------- | --------------- | -------------- | -------------- | ------------- | ------- | ----------------- |
+| test_reassembly.pcap               | 10       | 10      | 0.714           | 0.691          | 14.0 k/s       | 14.5 k/s      | 1.0×   | ✅                |
+| captured_handshakes.pcap           | 75       | 75      | 0.702           | 1.325          | 106.9 k/s      | 56.6 k/s      | 1.9×   | ✅                |
+| cloudflare_run1.pcap               | 2655     | 1877    | 1.134           | 20.114         | 2.34 M/s       | 93.3 k/s      | 17.7×  | ✅                |
+| curl.pcap                          | 1208     | 938     | 0.877           | 8.393          | 1.38 M/s       | 111.8 k/s     | 9.6×   | ✅                |
+| python_requests.pcap               | 356      | 223     | 0.701           | 2.596          | 508.1 k/s      | 85.9 k/s      | 3.7×   | ✅                |
+| custom_client.pcap                 | 133      | 105     | 0.665           | 1.290          | 200.0 k/s      | 81.4 k/s      | 1.9×   | ✅                |
+| chrome.pcap                        | 630      | 353     | 0.742           | 4.526          | 849.6 k/s      | 78.0 k/s      | 6.1×   | ✅                |
+| chrome_run2.pcap                   | 591      | 352     | 0.729           | 4.310          | 811.0 k/s      | 81.7 k/s      | 5.9×   | ✅                |
+| cloudflare_x100.pcap (265.5K pkts) | 265500   | 187700  | 68.446          | 2263.848       | 3.88 M/s       | 82.9 k/s      | 33.1×  | ❌                |
 
 ### 5.1 Reading the Results Honestly
 
@@ -222,8 +228,9 @@ TLS fingerprinting's value comes from one fact: the encrypted payload tells you 
 **(e) Post-handshake blindness.** Fingerprinting only sees the plaintext handshake. TLS 1.3 additionally moves the Certificate and other post-ServerHello messages behind encryption, shrinking the available metadata surface further relative to TLS 1.2. A future Encrypted Client Hello (ECH) deployment would eliminate passive ClientHello fingerprinting entirely.
 
 **(f) Engineering-scope limitations of this specific implementation** (as opposed to the technique in general):
-   - The **C++ engine is POSIX-only**, since it depends directly on `libpcap`. It will not build or run on Windows without swapping in Npcap/WinPcap-compatible headers and adjusting the socket/signal-handling code, which is POSIX-specific (`sigaction`, `getaddrinfo`, raw sockets for the Redis RESP client). The Python engine, using `dpkt` and `scapy`, is cross-platform by comparison (modulo live-capture privilege requirements on any OS).
-   - Our **reference database only covers a bounded, curated set of clients** — the clients we deliberately captured (curl variants, major browsers headless, Python `requests`/`ssl`, a handful of language runtimes) plus whatever the Salesforce community CSV and FoxIO JA4+ mapping already catalogued. Any client outside that set returns "Unknown," not a wrong answer, but a coverage gap: the tool's identification power is bounded by database size, not algorithmic capability, and a production deployment would need continuous ingestion from much larger community/threat-intel feeds to be useful at scale.
+
+- The **C++ engine is POSIX-only**, since it depends directly on `libpcap`. It will not build or run on Windows without swapping in Npcap/WinPcap-compatible headers and adjusting the socket/signal-handling code, which is POSIX-specific (`sigaction`, `getaddrinfo`, raw sockets for the Redis RESP client). The Python engine, using `dpkt` and `scapy`, is cross-platform by comparison (modulo live-capture privilege requirements on any OS).
+- Our **reference database only covers a bounded, curated set of clients** — the clients we deliberately captured (curl variants, major browsers headless, Python `requests`/`ssl`, a handful of language runtimes) plus whatever the Salesforce community CSV and FoxIO JA4+ mapping already catalogued. Any client outside that set returns "Unknown," not a wrong answer, but a coverage gap: the tool's identification power is bounded by database size, not algorithmic capability, and a production deployment would need continuous ingestion from much larger community/threat-intel feeds to be useful at scale.
 
 ---
 
