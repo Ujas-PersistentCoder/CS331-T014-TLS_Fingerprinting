@@ -1,6 +1,6 @@
 import os
 from PyQt6.QtCore import QThread, pyqtSignal
-from scapy.all import AsyncSniffer, IP, IPv6, TCP
+from scapy.all import AsyncSniffer, IP, IPv6, TCP, get_working_ifaces
 from src.capture import read_pcap, TCPReassembler, CaptureStats
 from src.ja3 import compute_ja3_hash, compute_ja3_string, compute_ja3s_hash
 from src.ja4 import compute_ja4_string, compute_ja4s_string
@@ -123,7 +123,14 @@ class LiveCaptureWorker(QThread):
 
     def run(self):
         try:
-            ifaceArg = None if self.interfaceName == "Default" else self.interfaceName
+            if self.interfaceName == "Any":
+                # Scapy requires an explicit list to sniff multiple interfaces concurrently
+                ifaceArg = [iface.network_name for iface in get_working_ifaces()]
+            elif self.interfaceName == "Default":
+                ifaceArg = None
+            else:
+                ifaceArg = self.interfaceName
+
             self.sniffer = AsyncSniffer(
                 iface=ifaceArg,
                 filter="tcp port 443",

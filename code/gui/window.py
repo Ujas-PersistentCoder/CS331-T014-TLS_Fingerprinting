@@ -44,6 +44,10 @@ class TlsMonitorGui(QMainWindow):
 
         controlLayout.addWidget(QLabel("Interface:"))
         self.interfaceDropdown = QComboBox()
+        
+        # Add the 'Any' option as the default first choice
+        self.interfaceDropdown.addItem("Any (All Interfaces)", "Any")
+        
         try:
             for iface in get_working_ifaces():
                 self.interfaceDropdown.addItem(iface.name, iface.network_name)
