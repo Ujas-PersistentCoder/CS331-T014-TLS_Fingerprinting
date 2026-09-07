@@ -430,7 +430,7 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
             }
         }
     }
-    ctx->active_flows.erase(key); // Remove flow after processing handshake 
+    ctx->active_flows.erase(it); // Remove flow after processing handshake 
 }
 
 bool start_capture(const CaptureOptions &opts) {
@@ -457,7 +457,9 @@ bool start_capture(const CaptureOptions &opts) {
                       << opts.interface_name << "': " << errbuf << "\n";
             return false;
         }
-        std::cout << "[*] Listening on interface: " << opts.interface_name << "\n";
+        if (!opts.quiet) {
+            std::cout << "[*] Live capture started on interface: " << opts.interface_name << "\n";
+        }
     }
 
     g_pcap_handle.store(handle, std::memory_order_relaxed);
@@ -523,7 +525,7 @@ bool start_capture(const CaptureOptions &opts) {
     double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - ctx.start_time).count();
     double elapsed_sec = elapsed_ms / 1000.0;
     double pps = (elapsed_sec > 0.0) ? (static_cast<double>(ctx.total_packets) / elapsed_sec) : 0.0;
-    bool success = true;
+    bool success = (loop_status != -1);
     if (opts.quiet) {
         std::cout << "=================== TLSFP Benchmark Summary ===================\n"
                   << " Total Packets Scanned : " << ctx.total_packets << "\n"

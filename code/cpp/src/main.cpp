@@ -13,7 +13,8 @@ static void print_usage(const char *prog_name) {
               << "  -i <interface>   Live network interface (e.g., any, eth0)\n"
               << "  -r <pcap_file>   Read packets from offline PCAP file\n"
               << "  -w <pcap_file>   Save matched TLS handshakes to output PCAP\n"
-              << "  -f <bpf_filter>  Custom BPF filter expression (default: 'tcp')\n\n"
+              << "  -f <bpf_filter>  Custom BPF filter expression (default: 'tcp')\n"
+              << "  -u               Prompt and enroll unknown fingerprints interactively\n\n"
               << "Output Mode Options:\n"
               << "  -q               Quiet mode: suppress all per-packet I/O, output benchmark summary\n"
               << "  -v               Verbose mode: print detailed dissection, framing, and pre-hash strings\n"
@@ -21,7 +22,8 @@ static void print_usage(const char *prog_name) {
               << "Examples:\n"
               << "  Benchmark:       " << prog_name << " -r trace.pcap -q\n"
               << "  Deep Debug:      " << prog_name << " -r trace.pcap -v\n"
-              << "  Live Capture:    " << prog_name << " -i any -f \"tcp port 443\"\n";
+              << "  Live Capture:    " << prog_name << " -i any -f \"tcp port 443\"\n"
+              << "  Live Enrollment: " << prog_name << " -i any -u\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -34,18 +36,30 @@ int main(int argc, char *argv[]) {
     tlsfp::CaptureOptions opts;
     int opt;
 
-    while ((opt = getopt(argc, argv, "i:r:w:f:qvh")) != -1) {
+    while ((opt = getopt(argc, argv, "i:r:w:f:uqvh")) != -1) {
         switch (opt) {
             case 'i': opts.interface_name = optarg; break;
             case 'r': opts.read_filename  = optarg; break;
             case 'w': opts.write_filename = optarg; break;
             case 'f': opts.bpf_filter     = optarg; break;
+            case 'u': opts.interactive    = true;   break;
             case 'q': opts.quiet          = true;   break;
             case 'v': opts.verbose        = true;   break;
             case 'h': print_usage(argv[0]); return 0;
             default:  print_usage(argv[0]); return 1;
         }
     }
+
+    if (optind < argc) {
+        std::cerr << "[-] Error: Unrecognized extra argument: " << argv[optind] << "\n";
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    if (opts.quiet && opts.verbose) {
+    std::cerr << "[-] Error: -q (quiet) and -v (verbose) cannot be used together.\n";
+    return 1;
+}
 
     // Catch rogue unparsed positional arguments
     if (optind < argc) {

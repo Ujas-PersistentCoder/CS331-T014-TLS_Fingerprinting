@@ -126,7 +126,7 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
     fp.ja4_a.reserve(10);
     fp.ja4_a.push_back('t'); // Protocol: TCP
     fp.ja4_a.append(resolve_ja4_version(client)); // TLS Version
-    if (client.has_sni && !is_literal_ip(client.sni)) {
+    if (client.has_sni && !client.sni.empty() && !is_literal_ip(client.sni)) {
         fp.ja4_a.push_back('d');
     } else {
         fp.ja4_a.push_back('i');
@@ -209,6 +209,7 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
         case 0x0303: fp.ja4_a.append("12"); break;
         case 0x0302: fp.ja4_a.append("11"); break;
         case 0x0301: fp.ja4_a.append("10"); break;
+        case 0x0300: fp.ja4_a.append("s3"); break;
         default:     fp.ja4_a.append("00"); break;
     }
 

@@ -35,7 +35,7 @@ struct ThreadLocalEvpContext {
     ThreadLocalEvpContext& operator=(const ThreadLocalEvpContext&) = delete;
 };
 
-std::string md5_hex(const std::string &input) {
+std::string md5_hex(std::string_view input) {
     // Reusable thread-local context avoids heap allocation per packet
     static thread_local ThreadLocalEvpContext tls_ctx;
     if (!tls_ctx.ctx) return "";

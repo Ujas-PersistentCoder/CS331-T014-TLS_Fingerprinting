@@ -74,11 +74,11 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                 if (ext_len >= 5) {
                     ByteReader sni_reader{reader.data, ext_start + ext_len, ext_start};
                     uint16_t list_len = sni_reader.read_u16();
-                    if (list_len + 2 <= ext_len && sni_reader.has_bytes(3)) {
+                    if (list_len >= 3 && list_len + 2 <= ext_len && sni_reader.has_bytes(3)) {
                         uint8_t name_type = sni_reader.read_u8();
                         uint16_t name_len = sni_reader.read_u16();
                         // 0 = host_name per RFC 6066
-                        if (name_type == 0 && name_len <= list_len - 3 && sni_reader.has_bytes(name_len)) {
+                        if (name_type == 0 && list_len >= 3 && name_len >= 0 && name_len <= list_len - 3 && sni_reader.has_bytes(name_len)) {
                             out.has_sni = true;
                             // Zerocopy std::string_view eliminates heap allocation
                             out.sni = std::string_view(reinterpret_cast<const char*>(sni_reader.data + sni_reader.offset), name_len);
@@ -147,7 +147,7 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                         const size_t list_end = alpn_reader.offset + list_len;
                         while (alpn_reader.offset < list_end && alpn_reader.has_bytes(1)) {
                             uint8_t proto_len = alpn_reader.read_u8();
-                            if (proto_len == 0 || !alpn_reader.has_bytes(proto_len)) break;
+                            if (proto_len == 0 || alpn_reader.offset + proto_len > list_end || !alpn_reader.has_bytes(proto_len)) break;
 
                             std::string_view cand(
                                 reinterpret_cast<const char*>(alpn_reader.data + alpn_reader.offset), 
