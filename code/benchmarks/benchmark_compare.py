@@ -93,17 +93,34 @@ def main():
         raise SystemExit("No matching pcaps between the two result files -- nothing to compare.")
 
     # ---- console table ----
-    hdr = (f"{'pcap':<30}{'C++ pkts':>9}{'Py pkts':>9}{'C++ ms':>9}{'Py ms':>10}"
-        f"{'C++ thru':>11}{'Py thru':>11}{'Speedup':>9}{'Match?':>8}")
+    hdr = (
+        f"{'pcap':<28}"
+        f"{'C++ (CH/SH)':>14}"
+        f"{'Py (CH/SH)':>14}"
+        f"{'C++ ms':>10}"
+        f"{'Py ms':>11}"
+        f"{'C++ thru':>12}"
+        f"{'Py thru':>12}"
+        f"{'Speedup':>9}"
+        f"{'Match?':>8}"
+    )
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
         match_str = "✅" if r["handshakes_match"] else "❌"
+        cpp_handshakes = f"{r['cpp_client_hellos']}/{r['cpp_server_hellos']}"
+        py_handshakes = f"{r['py_client_hellos']}/{r['py_server_hellos']}"
+
         print(
-            f"{r['pcap']:<30}{r['cpp_packets']:>9}{r['py_packets']:>9}"
-            f"{r['cpp_engine_median_ms']:>9.3f}{r['py_engine_median_ms']:>10.3f}"
-            f"{fmt_pps(r['cpp_pkts_per_sec']):>11}{fmt_pps(r['py_pkts_per_sec']):>11}"
-            f"{r['cpp_speedup_x']:>8.1f}x{match_str:>7}"
+            f"{r['pcap']:<28}"
+            f"{cpp_handshakes:>14}"
+            f"{py_handshakes:>14}"
+            f"{r['cpp_engine_median_ms']:>10.3f}"
+            f"{r['py_engine_median_ms']:>11.3f}"
+            f"{fmt_pps(r['cpp_pkts_per_sec']):>12}"
+            f"{fmt_pps(r['py_pkts_per_sec']):>12}"
+            f"{r['cpp_speedup_x']:>8.1f}x"
+            f"{match_str:>7}"
         )
 
     # ---- csv ----
@@ -126,8 +143,6 @@ def main():
             r["pcap"].replace("benchmark/", "") + ("*" if not r["handshakes_match"] else "") 
             for r in plot_rows
         ]
-
-        labels = [r["pcap"].replace("benchmark/", "") for r in plot_rows]
         cpp_thru = [r["cpp_pkts_per_sec"] for r in plot_rows]
         py_thru = [r["py_pkts_per_sec"] for r in plot_rows]
 
