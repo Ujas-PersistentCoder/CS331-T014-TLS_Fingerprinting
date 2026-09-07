@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 from scapy.all import get_working_ifaces, wrpcap
 from src.db import FingerprintDB
 from workers import PcapWorker, LiveCaptureWorker
-from analytics import AnalyticsPanel
+from analytics import AnalyticsWindow
 
 class TlsMonitorGui(QMainWindow):
     def __init__(self, pythonEngineDir):
@@ -28,55 +28,55 @@ class TlsMonitorGui(QMainWindow):
         self.capturedPackets = []
         self.loadedPcapPath = None
 
-        centralContainer = QWidget()
-        self.setCentralWidget(centralContainer)
-        rootLayout = QHBoxLayout(centralContainer)
-        rootLayout.setContentsMargins(0, 0, 0, 0)
-        rootLayout.setSpacing(0)
+        self.analyticsWindow = AnalyticsWindow()
+        self.analyticsWindow.setRowCache(self.rowCache)
 
-        self.analyticsPanel = AnalyticsPanel(self)
-        self.analyticsPanel.setRowCache(self.rowCache)
-        rootLayout.addWidget(self.analyticsPanel)
-
-        contentWidget = QWidget()
-        mainLayout = QVBoxLayout(contentWidget)
-        mainLayout.setContentsMargins(8, 8, 8, 8)
-        rootLayout.addWidget(contentWidget)
-
+        mainWidget = QWidget()
+        self.setCentralWidget(mainWidget)
+        mainLayout = QVBoxLayout(mainWidget)
+        
         controlLayout = QHBoxLayout()
         self.loadButton = QPushButton("Load PCAP")
         self.loadButton.clicked.connect(self.selectPcapFile)
         controlLayout.addWidget(self.loadButton)
+        
         self.cancelLoadButton = QPushButton("Cancel Load")
         self.cancelLoadButton.clicked.connect(self.cancelPcapLoad)
         self.cancelLoadButton.setEnabled(False)
         controlLayout.addWidget(self.cancelLoadButton)
+        
         self.saveButton = QPushButton("Save PCAP")
         self.saveButton.clicked.connect(self.savePcapFile)
         controlLayout.addWidget(self.saveButton)
+        
         self.clearButton = QPushButton("Clear Records")
         self.clearButton.clicked.connect(self.clearRecords)
         controlLayout.addWidget(self.clearButton)
+        
         self.refreshInterfacesButton = QPushButton("Refresh Interfaces")
         self.refreshInterfacesButton.clicked.connect(self.populateInterfaces)
         controlLayout.addWidget(self.refreshInterfacesButton)
+        
         controlLayout.addWidget(QLabel("Interface:"))
         self.interfaceDropdown = QComboBox()
         self.populateInterfaces()
         controlLayout.addWidget(self.interfaceDropdown)
+        
         controlLayout.addWidget(QLabel("BPF Filter:"))
         self.bpfFilterInput = QLineEdit("tcp port 443")
         controlLayout.addWidget(self.bpfFilterInput)
+        
         self.liveButton = QPushButton("Start Live Capture")
         self.liveButton.clicked.connect(self.toggleLiveCapture)
         controlLayout.addWidget(self.liveButton)
+        
         self.labelButton = QPushButton("Label Fingerprint")
         self.labelButton.clicked.connect(self.labelSelectedFingerprint)
         self.labelButton.setEnabled(False)
         controlLayout.addWidget(self.labelButton)
 
         self.analyticsButton = QPushButton("Analytics")
-        self.analyticsButton.clicked.connect(self.toggleAnalytics)
+        self.analyticsButton.clicked.connect(self.openAnalytics)
         controlLayout.addWidget(self.analyticsButton)
 
         controlLayout.addStretch()
@@ -109,8 +109,15 @@ class TlsMonitorGui(QMainWindow):
 
         mainLayout.addLayout(detailsLayout)
 
-    def toggleAnalytics(self):
-        self.analyticsPanel.togglePanel()
+    def openAnalytics(self):
+        self.analyticsWindow.refreshCharts()
+        self.analyticsWindow.show()
+        self.analyticsWindow.raise_()
+        self.analyticsWindow.activateWindow()
+
+    def updateAnalyticsIfVisible(self):
+        if self.analyticsWindow.isVisible():
+            self.analyticsWindow.refreshCharts()
 
     def populateInterfaces(self):
         self.interfaceDropdown.clear()
@@ -128,6 +135,7 @@ class TlsMonitorGui(QMainWindow):
         if self.liveWorker and self.liveWorker.isRunning():
             self.liveWorker.stopCapture()
             self.liveWorker.wait()
+        self.analyticsWindow.close()
         event.accept()
 
     def getDb(self):
@@ -151,14 +159,13 @@ class TlsMonitorGui(QMainWindow):
             self.pcapWorker.rowExtracted.connect(self.appendTableRow)
             self.pcapWorker.errorOccurred.connect(lambda err: self.detailsPane.setText(f"Error: {err}"))
             self.pcapWorker.captureFinished.connect(self.onCaptureFinished)
-            self.analyticsPanel.refreshCharts()
             self.pcapWorker.start()
 
     def cancelPcapLoad(self):
         if self.pcapWorker and self.pcapWorker.isRunning():
             self.pcapWorker.stopCapture()
             self.detailsPane.append("\nPCAP loading cancelled.")
-            self.analyticsPanel.refreshCharts()
+            self.updateAnalyticsIfVisible()
 
     def onCaptureFinished(self, statsSummary):
         self.loadButton.setEnabled(True)
@@ -166,14 +173,13 @@ class TlsMonitorGui(QMainWindow):
         self.cancelLoadButton.setEnabled(False)
         currentText = self.detailsPane.toPlainText()
         self.detailsPane.setText(f"{currentText}\n\nCapture Finished.\n{statsSummary}")
-        self.analyticsPanel.refreshCharts()
+        self.updateAnalyticsIfVisible()
 
     def toggleLiveCapture(self):
         if self.liveWorker and self.liveWorker.isRunning():
             self.liveWorker.stopCapture()
             self.liveButton.setText("Start Live Capture")
             self.loadButton.setEnabled(True)
-            self.analyticsPanel.stopLiveUpdates()
         else:
             if self.pcapWorker and self.pcapWorker.isRunning():
                 return
@@ -192,7 +198,6 @@ class TlsMonitorGui(QMainWindow):
             self.liveButton.setText("Stop Live Capture")
             self.loadButton.setEnabled(False)
             self.cancelLoadButton.setEnabled(False)
-            self.analyticsPanel.startLiveUpdates()
 
     def clearRecords(self):
         self.dataTable.setRowCount(0)
@@ -202,7 +207,7 @@ class TlsMonitorGui(QMainWindow):
         self.detailsPane.clear()
         self.timestampLabel.setText("Timestamp: N/A")
         self.labelButton.setEnabled(False)
-        self.analyticsPanel.refreshCharts()
+        self.updateAnalyticsIfVisible()
 
     def savePcapFile(self):
         if not self.capturedPackets and not self.loadedPcapPath:
@@ -249,6 +254,7 @@ class TlsMonitorGui(QMainWindow):
             item.setBackground(rowColor)
             self.dataTable.setItem(currentRow, colIdx, item)
         self.dataTable.scrollToBottom()
+        self.updateAnalyticsIfVisible()
 
     def displayRowDetails(self):
         selectedRows = self.dataTable.selectionModel().selectedRows()
@@ -317,4 +323,4 @@ class TlsMonitorGui(QMainWindow):
                 newItem.setBackground(QColor(0, 255, 0, 20) if isClient else QColor(0, 0, 255, 20))
                 self.dataTable.setItem(rowIndex, targetColumn, newItem)
         self.displayRowDetails()
-        self.analyticsPanel.refreshCharts()
+        self.updateAnalyticsIfVisible()
