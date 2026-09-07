@@ -60,7 +60,8 @@ def compute_ja4_a(fields: ClientHelloFields) -> str:
         sni = 'i'
         
     ciphers_count = min(len(filter_grease(fields.cipher_suites)), 99)
-    # The count includes ALPN and SNI but excludes GREASE.
+    # The Python implementation follows the JA4 test vectors, counting all
+    # non-GREASE extensions in the prefix.
     exts_count = min(_ja4_ext_count(fields.extensions), 99)
     alpn_chars = resolve_alpn_chars(fields.alpn)
     

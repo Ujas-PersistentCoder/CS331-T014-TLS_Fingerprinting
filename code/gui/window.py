@@ -53,9 +53,10 @@ class TlsMonitorGui(QMainWindow):
         controlLayout.addStretch()
         mainLayout.addLayout(controlLayout)
 
-        self.dataTable = QTableWidget(0, 5)
+        self.dataTable = QTableWidget(0, 7)
         self.dataTable.setHorizontalHeaderLabels([
-            "Source", "Destination", "SNI", "JA3 Hash", "Matched Client"
+            "Source", "Destination", "SNI", "JA3 Hash", "JA4 Hash",
+            "JA3 Match", "JA4 Match"
         ])
         self.dataTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.dataTable.itemSelectionChanged.connect(self.displayRowDetails)
@@ -114,7 +115,9 @@ class TlsMonitorGui(QMainWindow):
         self.dataTable.setItem(currentRow, 1, QTableWidgetItem(packetData["destination"]))
         self.dataTable.setItem(currentRow, 2, QTableWidgetItem(packetData["sni"]))
         self.dataTable.setItem(currentRow, 3, QTableWidgetItem(packetData["ja3Hash"]))
-        self.dataTable.setItem(currentRow, 4, QTableWidgetItem(packetData["matchedClient"]))
+        self.dataTable.setItem(currentRow, 4, QTableWidgetItem(packetData["ja4Hash"]))
+        self.dataTable.setItem(currentRow, 5, QTableWidgetItem(packetData["ja3Match"]))
+        self.dataTable.setItem(currentRow, 6, QTableWidgetItem(packetData["ja4Match"]))
 
     def displayRowDetails(self):
         selectedRows = self.dataTable.selectionModel().selectedRows()
@@ -124,12 +127,14 @@ class TlsMonitorGui(QMainWindow):
         rowIndex = selectedRows[0].row()
         if rowIndex < len(self.rowCache):
             entry = self.rowCache[rowIndex]
-            isUnknown = entry.get("matchedClient") in (None, "", "Unknown")
+            isUnknown = entry.get("ja3Match") == "Unknown" or entry.get("ja4Match") == "Unknown"
             self.labelButton.setEnabled(isUnknown)
             detailText = (
                 f"SNI:        {entry['sni']}\n"
                 f"JA3 Hash:   {entry['ja3Hash']}\n"
-                f"Client:     {entry['matchedClient']}\n"
+                f"JA3 Match:  {entry['ja3Match']}\n"
+                f"JA4 Hash:   {entry['ja4Hash']}\n"
+                f"JA4 Match:  {entry['ja4Match']}\n"
                 f"Raw JA3:    {entry.get('ja3Raw', 'N/A')}"
             )
             self.detailsPane.setText(detailText)
@@ -143,7 +148,7 @@ class TlsMonitorGui(QMainWindow):
         if rowIndex >= len(self.rowCache):
             return
         entry = self.rowCache[rowIndex]
-        if entry.get("matchedClient") not in (None, "", "Unknown"):
+        if entry.get("ja3Match") != "Unknown" and entry.get("ja4Match") != "Unknown":
             return
 
         label, accepted = QInputDialog.getText(
@@ -156,7 +161,7 @@ class TlsMonitorGui(QMainWindow):
 
         try:
             self.fingerprintDb.enroll(
-                entry["ja3Hash"],
+                entry["fingerprintHash"],
                 entry.get("fingerprintKind", "ja3"),
                 label,
             )
@@ -164,6 +169,8 @@ class TlsMonitorGui(QMainWindow):
             self.detailsPane.setText(f"Could not save fingerprint: {error}")
             return
 
-        entry["matchedClient"] = label.strip()
-        self.dataTable.setItem(rowIndex, 4, QTableWidgetItem(entry["matchedClient"]))
+        target_match = "ja3Match" if entry.get("fingerprintKind") == "ja3" else "ja4Match"
+        entry[target_match] = label.strip()
+        target_column = 5 if target_match == "ja3Match" else 6
+        self.dataTable.setItem(rowIndex, target_column, QTableWidgetItem(entry[target_match]))
         self.displayRowDetails()

@@ -3,8 +3,51 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from scapy.all import AsyncSniffer, IP, IPv6, TCP
 
 from src.capture import read_pcap, TCPReassembler, CaptureStats
-from src.ja3 import compute_ja3_hash, compute_ja3_string
+from src.ja3 import compute_ja3_hash, compute_ja3_string, compute_ja3s_hash
+from src.ja4 import compute_ja4_string, compute_ja4s_string
 from src.db import FingerprintDB
+
+
+def client_packet_data(result, client_hello, fingerprint_db):
+    ja3_hash = compute_ja3_hash(client_hello)
+    ja4_hash = compute_ja4_string(client_hello)
+    ja3_match = fingerprint_db.lookup(ja3_hash, "ja3") or "Unknown"
+    ja4_match = fingerprint_db.lookup(ja4_hash, "ja4") or "Unknown"
+    target_kind = "ja3" if ja3_match == "Unknown" else "ja4"
+    target_hash = ja3_hash if target_kind == "ja3" else ja4_hash
+    return {
+        "source": f"{result.src_ip}:{result.src_port}",
+        "destination": f"{result.dst_ip}:{result.dst_port}",
+        "sni": client_hello.server_name or "N/A",
+        "ja3Hash": ja3_hash,
+        "ja4Hash": ja4_hash,
+        "ja3Match": ja3_match,
+        "ja4Match": ja4_match,
+        "fingerprintKind": target_kind,
+        "fingerprintHash": target_hash,
+        "ja3Raw": compute_ja3_string(client_hello),
+    }
+
+
+def server_packet_data(result, server_hello, fingerprint_db):
+    ja3s_hash = compute_ja3s_hash(server_hello)
+    ja4s_hash = compute_ja4s_string(server_hello)
+    ja3s_match = fingerprint_db.lookup(ja3s_hash, "ja3s") or "Unknown"
+    ja4s_match = fingerprint_db.lookup(ja4s_hash, "ja4s") or "Unknown"
+    target_kind = "ja3s" if ja3s_match == "Unknown" else "ja4s"
+    target_hash = ja3s_hash if target_kind == "ja3s" else ja4s_hash
+    return {
+        "source": f"{result.src_ip}:{result.src_port}",
+        "destination": f"{result.dst_ip}:{result.dst_port}",
+        "sni": "N/A",
+        "ja3Hash": ja3s_hash,
+        "ja4Hash": ja4s_hash,
+        "ja3Match": ja3s_match,
+        "ja4Match": ja4s_match,
+        "fingerprintKind": target_kind,
+        "fingerprintHash": target_hash,
+        "ja3Raw": "N/A",
+    }
 
 class PcapWorker(QThread):
     rowExtracted = pyqtSignal(dict)
@@ -25,20 +68,13 @@ class PcapWorker(QThread):
 
             for result in read_pcap(self.pcapPath, self.captureStats):
                 if result.client_hello:
-                    clientHello = result.client_hello
-                    ja3Hash = compute_ja3_hash(clientHello)
-                    match = self.fingerprintDb.lookup(ja3Hash, "ja3") or "Unknown"
-
-                    packetData = {
-                        "source": f"{result.src_ip}:{result.src_port}",
-                        "destination": f"{result.dst_ip}:{result.dst_port}",
-                        "sni": clientHello.server_name or "N/A",
-                        "ja3Hash": ja3Hash,
-                        "fingerprintKind": "ja3",
-                        "matchedClient": match,
-                        "ja3Raw": compute_ja3_string(clientHello),
-                    }
-                    self.rowExtracted.emit(packetData)
+                    self.rowExtracted.emit(
+                        client_packet_data(result, result.client_hello, self.fingerprintDb)
+                    )
+                if result.server_hello:
+                    self.rowExtracted.emit(
+                        server_packet_data(result, result.server_hello, self.fingerprintDb)
+                    )
 
             self.captureFinished.emit(self.captureStats.summary())
         except Exception as e:
@@ -79,20 +115,13 @@ class LiveCaptureWorker(QThread):
 
         for res in results:
             if res.client_hello:
-                clientHello = res.client_hello
-                ja3Hash = compute_ja3_hash(clientHello)
-                match = self.fingerprintDb.lookup(ja3Hash, "ja3") or "Unknown"
-
-                packetData = {
-                    "source": f"{res.src_ip}:{res.src_port}",
-                    "destination": f"{res.dst_ip}:{res.dst_port}",
-                    "sni": clientHello.server_name or "N/A",
-                    "ja3Hash": ja3Hash,
-                    "fingerprintKind": "ja3",
-                    "matchedClient": match,
-                    "ja3Raw": compute_ja3_string(clientHello),
-                }
-                self.rowExtracted.emit(packetData)
+                self.rowExtracted.emit(
+                    client_packet_data(res, res.client_hello, self.fingerprintDb)
+                )
+            if res.server_hello:
+                self.rowExtracted.emit(
+                    server_packet_data(res, res.server_hello, self.fingerprintDb)
+                )
 
     def run(self):
         try:
