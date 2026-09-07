@@ -230,6 +230,8 @@ TLS fingerprinting's value comes from the fact that the encrypted payload tells 
 - The **C++ engine is POSIX-only**, since it depends directly on `libpcap`. It will not build or run on Windows without swapping in Npcap/WinPcap-compatible headers and adjusting the socket/signal-handling code, which is POSIX-specific. The Python engine, using `dpkt` and `scapy`, is cross-platform by comparison (modulo live-capture privilege requirements on any OS).
 - Our **reference database only covers a bounded, curated set of clients** — the clients we deliberately captured (curl variants, major browsers headless, Python `requests`/`ssl`, a handful of language runtimes) plus whatever the Salesforce community CSV and FoxIO JA4+ mapping already catalogued. Any client outside that set returns "Unknown".
 
+**(g) Environment-Dependent Fingerprint Drift**: TLS fingerprints are highly dependent on the underlying environment generating the request (e.g., OpenSSL library version linked against the client on a specific OS). An exact match against our curated database requires the exact same environment used to generate the seed capture. For example, a `Python requests` client running on one machine may offer 31 cipher suites, generating one JA3/JA4 hash, while the exact same Python script on a different machine with a different TLS backend may offer 18 cipher suites, resulting in completely different JA3 and JA4 hashes. This is explicitly visible in the JA4 signature format, where the cipher count (e.g., `t13d31...` vs `t13d18...`) and truncated sorted cipher hashes drastically diverge. Consequently, cross-environment testing frequently results in "Unknown" matches because exact hash lookups are extremely brittle to environment drift.
+
 ---
 
 ## 7. Future Scope
