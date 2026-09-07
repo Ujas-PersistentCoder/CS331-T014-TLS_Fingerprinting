@@ -1,11 +1,12 @@
 from pathlib import Path
+import shutil
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
     QTableWidget, QTableWidgetItem, QFileDialog, QHeaderView, 
-    QComboBox, QLabel, QTextEdit
-    , QInputDialog
+    QComboBox, QLabel, QTextEdit, QInputDialog, QAbstractItemView
 )
-from scapy.all import get_working_ifaces
+from scapy.all import get_working_ifaces, wrpcap
 from src.db import FingerprintDB
 from workers import PcapWorker, LiveCaptureWorker
 
@@ -13,14 +14,15 @@ class TlsMonitorGui(QMainWindow):
     def __init__(self, pythonEngineDir):
         super().__init__()
         self.setWindowTitle("TLS Fingerprint Monitor")
-        self.resize(1100, 650)
-
+        self.resize(1150, 650)
         self.dbPath = pythonEngineDir / "fingerprints.json"
         self.pcapsDir = pythonEngineDir.parent / "pcaps"
         self.fingerprintDb = FingerprintDB(str(self.dbPath))
         self.pcapWorker = None
         self.liveWorker = None
         self.rowCache = []
+        self.capturedPackets = []
+        self.loadedPcapPath = None
 
         mainWidget = QWidget()
         self.setCentralWidget(mainWidget)
@@ -31,6 +33,14 @@ class TlsMonitorGui(QMainWindow):
         self.loadButton = QPushButton("Load PCAP File")
         self.loadButton.clicked.connect(self.selectPcapFile)
         controlLayout.addWidget(self.loadButton)
+
+        self.saveButton = QPushButton("Save PCAP")
+        self.saveButton.clicked.connect(self.savePcapFile)
+        controlLayout.addWidget(self.saveButton)
+
+        self.clearButton = QPushButton("Clear Records")
+        self.clearButton.clicked.connect(self.clearRecords)
+        controlLayout.addWidget(self.clearButton)
 
         controlLayout.addWidget(QLabel("Interface:"))
         self.interfaceDropdown = QComboBox()
@@ -59,6 +69,8 @@ class TlsMonitorGui(QMainWindow):
             "JA3 Match", "JA4 Match"
         ])
         self.dataTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.dataTable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.dataTable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.dataTable.itemSelectionChanged.connect(self.displayRowDetails)
         mainLayout.addWidget(self.dataTable)
 
@@ -75,6 +87,8 @@ class TlsMonitorGui(QMainWindow):
         if filePath:
             self.dataTable.setRowCount(0)
             self.rowCache.clear()
+            self.capturedPackets.clear()
+            self.loadedPcapPath = filePath
             self.detailsPane.clear()
 
             self.pcapWorker = PcapWorker(filePath, self.dbPath)
@@ -92,38 +106,77 @@ class TlsMonitorGui(QMainWindow):
             selectedInterface = self.interfaceDropdown.currentData()
             self.dataTable.setRowCount(0)
             self.rowCache.clear()
+            self.capturedPackets.clear()
+            self.loadedPcapPath = None
             self.detailsPane.clear()
 
-            self.liveWorker = LiveCaptureWorker(selectedInterface, self.dbPath)
+            self.liveWorker = LiveCaptureWorker(
+                selectedInterface, self.dbPath, packetBuffer=self.capturedPackets
+            )
             self.liveWorker.rowExtracted.connect(self.appendTableRow)
-            
-            # Bind the new error signal to the UI pane
             self.liveWorker.errorOccurred.connect(
                 lambda errorMsg: self.detailsPane.setText(errorMsg)
             )
-
             self.liveWorker.start()
             self.liveButton.setText("Stop Live Capture")
             self.loadButton.setEnabled(False)
+
+    def clearRecords(self):
+        self.dataTable.setRowCount(0)
+        self.rowCache.clear()
+        self.capturedPackets.clear()
+        self.loadedPcapPath = None
+        self.detailsPane.clear()
+        self.labelButton.setEnabled(False)
+
+    def savePcapFile(self):
+        if not self.capturedPackets and not self.loadedPcapPath:
+            self.detailsPane.setText("No captured or loaded packets available to save.")
+            return
+
+        savePath, _ = QFileDialog.getSaveFileName(
+            self, "Save PCAP", str(self.pcapsDir / "captured.pcap"), "PCAP Files (*.pcap *.pcapng)"
+        )
+        if not savePath:
+            return
+
+        try:
+            if self.capturedPackets:
+                packetsSnapshot = list(self.capturedPackets)
+                wrpcap(savePath, packetsSnapshot)
+                self.detailsPane.setText(f"Successfully saved {len(packetsSnapshot)} packet(s) to {savePath}")
+            elif self.loadedPcapPath:
+                shutil.copyfile(self.loadedPcapPath, savePath)
+                self.detailsPane.setText(f"Successfully exported PCAP to {savePath}")
+        except Exception as err:
+            self.detailsPane.setText(f"Failed to save PCAP: {err}")
 
     def appendTableRow(self, packetData):
         currentRow = self.dataTable.rowCount()
         self.dataTable.insertRow(currentRow)
         self.rowCache.append(packetData)
 
-        self.dataTable.setItem(currentRow, 0, QTableWidgetItem(packetData["source"]))
-        self.dataTable.setItem(currentRow, 1, QTableWidgetItem(packetData["destination"]))
-        self.dataTable.setItem(currentRow, 2, QTableWidgetItem(packetData["sni"]))
-        self.dataTable.setItem(currentRow, 3, QTableWidgetItem(packetData["ja3Hash"]))
-        self.dataTable.setItem(currentRow, 4, QTableWidgetItem(packetData["ja4Hash"]))
-        self.dataTable.setItem(currentRow, 5, QTableWidgetItem(packetData["ja3Match"]))
-        self.dataTable.setItem(currentRow, 6, QTableWidgetItem(packetData["ja4Match"]))
+        columnValues = [
+            packetData["source"],
+            packetData["destination"],
+            packetData["sni"],
+            packetData["ja3Hash"],
+            packetData["ja4Hash"],
+            packetData["ja3Match"],
+            packetData["ja4Match"],
+        ]
+
+        for colIdx, val in enumerate(columnValues):
+            item = QTableWidgetItem(str(val))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.dataTable.setItem(currentRow, colIdx, item)
 
     def displayRowDetails(self):
         selectedRows = self.dataTable.selectionModel().selectedRows()
         if not selectedRows:
             self.labelButton.setEnabled(False)
             return
+
         rowIndex = selectedRows[0].row()
         if rowIndex < len(self.rowCache):
             entry = self.rowCache[rowIndex]
@@ -147,6 +200,7 @@ class TlsMonitorGui(QMainWindow):
         rowIndex = selectedRows[0].row()
         if rowIndex >= len(self.rowCache):
             return
+
         entry = self.rowCache[rowIndex]
         if entry.get("ja3Match") != "Unknown" and entry.get("ja4Match") != "Unknown":
             return
@@ -172,5 +226,8 @@ class TlsMonitorGui(QMainWindow):
         target_match = "ja3Match" if entry.get("fingerprintKind") == "ja3" else "ja4Match"
         entry[target_match] = label.strip()
         target_column = 5 if target_match == "ja3Match" else 6
-        self.dataTable.setItem(rowIndex, target_column, QTableWidgetItem(entry[target_match]))
+        
+        newItem = QTableWidgetItem(entry[target_match])
+        newItem.setFlags(newItem.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.dataTable.setItem(rowIndex, target_column, newItem)
         self.displayRowDetails()
