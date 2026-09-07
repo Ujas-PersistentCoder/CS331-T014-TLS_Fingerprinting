@@ -170,6 +170,216 @@
       "category": "application",
       "source": "self-captured: cloudflare_run1.pcap",
       "notes": "JA4 correlated with the known JA3 catalog entry ecdf4f49dd59effc439639da29186671"
+    },
+    {
+      "hash": "t13i181000_85036bcba153_d41ae481755e",
+      "client": "Python",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d181000_85036bcba153_d41ae481755e",
+      "client": "Python",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d4312h1_c7886603b240_b26ce05bbdd6",
+      "client": "Python",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d1516h2_8daaf6152771_02713d6af862",
+      "client": "Chromium Browser",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d1517h2_8daaf6152771_b0da82dd1658",
+      "client": "Chromium Browser",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d1517h2_8daaf6152771_b1ff8ab2d16f",
+      "client": "Chromium Browser",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i1515h2_8daaf6152771_02713d6af862",
+      "client": "Chromium Browser",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i1516h2_8daaf6152771_b0da82dd1658",
+      "client": "Chromium Browser",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i1516h2_8daaf6152771_b1ff8ab2d16f",
+      "client": "Chromium Browser",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d1715h2_5b57614c22b0_7121afd63204",
+      "client": "Mozilla Firefox",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i1714h2_5b57614c22b0_7121afd63204",
+      "client": "Mozilla Firefox",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d2014h2_a09f3c656075_14788d8d241b",
+      "client": "Safari",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i2013h2_a09f3c656075_14788d8d241b",
+      "client": "Safari",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d190900_9dc949149365_97f8aa674fd9",
+      "client": "Sliver Agent",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i190800_9dc949149365_97f8aa674fd9",
+      "client": "Sliver Agent",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d201100_2b729b4bf6f3_9e7b989ebec8",
+      "client": "IcedID",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d880900_fcb5b95cb75a_b0d3b4ac2a14",
+      "client": "SoftEther VPN Client",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13i880900_fcb5b95cb75a_b0d3b4ac2a14",
+      "client": "SoftEther VPN Client",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12i190700_d83cc789557e_16bbda4055b2",
+      "client": "Cobalt Strike v4.9.1 beacon",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12i210700_76e208dd3e22_16bbda4055b2",
+      "client": "Cobalt Strike v4.9.1 beacon",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d190800_d83cc789557e_16bbda4055b2",
+      "client": "Cobalt Strike v4.9.1 beacon",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d210800_76e208dd3e22_16bbda4055b2",
+      "client": "Cobalt Strike v4.9.1 beacon",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d191000_9dc949149365_e7c285222651",
+      "client": "GoLang net package",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d1412h2_e33ad33b3d25_6b314db333b6",
+      "client": "GoLang webhooks",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d160700_8cdfa2d4673b_18dd7303c4a5",
+      "client": "GoLang",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t13d141000_cbb2034c60b8_e7c285222651",
+      "client": "GoLang",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d520600_b380db6257eb_0a9c83bf8b96",
+      "client": "LIFX Smart Bulbs",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d8008h1_9cedc1f1428b_046e095b7c4a",
+      "client": "Nest",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d350600_9d4c96c0953b_0a9c83bf8b96",
+      "client": "Phillips Hue Bridge",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t12d190800_d83cc789557e_7af1ed941c26",
+      "client": "GoLang",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
     }
   ],
   "ja4s": [
@@ -186,6 +396,20 @@
       "category": "server",
       "source": "self-captured: chrome_headless_20260831_061717.pcap",
       "notes": "JA4S best-effort, verify against reference"
+    },
+    {
+      "hash": "t120300_c030_5e2616a54c73",
+      "server": "IcedID",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
+    },
+    {
+      "hash": "t120300_c030_52d195ce1d92",
+      "server": "Cobalt Strike v4.9.1 beacon",
+      "category": "foxio-ja4-mapping",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
+      "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
     }
   ]
 }
