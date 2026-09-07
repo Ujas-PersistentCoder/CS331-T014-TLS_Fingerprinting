@@ -67,7 +67,7 @@
   "ja3s": [
     {
       "hash": "15af977ce25de452b96affa2addb1036",
-      "server": "OpenSSL s_server (also observed in curl_test2)",
+      "server": "OpenSSL s_server",
       "category": "server",
       "source": "self-captured: controlled_curl.pcap",
       "notes": "Controlled local OpenSSL server capture; same JA3S was also present in the legacy curl_test2 capture."
@@ -145,6 +145,15 @@
       "notes": "Generated with curl against the local OpenSSL s_server on loopback."
     },
     {
+      "hash": "t13d3112h2_e8f1e7e78f70_b26ce05bbdd6",
+      "client": "curl",
+      "version": "controlled local capture (Python JA4 representation)",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: controlled_curl.pcap",
+      "notes": "Python JA4 test-vector representation of the same ClientHello; C++ representation is t13d3110h2_e8f1e7e78f70_b26ce05bbdd6."
+    },
+    {
       "hash": "t13d3011h2_1d37bd780c83_8537cf56674e",
       "client": "curl (Modern)",
       "version": "unknown",
@@ -166,7 +175,7 @@
   "ja4s": [
     {
       "hash": "t130200_1302_a56c5b993250",
-      "server": "OpenSSL s_server (also observed in curl_test2)",
+      "server": "OpenSSL s_server",
       "category": "server",
       "source": "self-captured: controlled_curl.pcap",
       "notes": "Controlled local OpenSSL server capture; same JA4S was also present in the legacy curl_test2 capture."

@@ -25,6 +25,35 @@ sudo apt install -y build-essential cmake libpcap-dev libssl-dev redis-server py
 sudo systemctl enable --now redis-server
 ```
 
+### Redis database setup
+
+Redis runs locally at `127.0.0.1:6379` using database `0`. The Redis data itself is runtime state and is not stored in GitHub. The fingerprint catalog is committed to the repository in these files:
+
+- `code/db/seed_fingerprints.json`: curated JA3, JA3S, JA4, and JA4S records
+- `code/python/fingerprints.json`: public and legacy JA3 records
+
+No manual database import is required. When the C++ engine or Python application starts, it connects to Redis and automatically seeds the committed records. A fresh clone therefore gets the same catalog after Redis is installed and running.
+
+Verify that Redis is available with:
+
+```bash
+redis-cli ping
+```
+
+Expected output:
+
+```text
+PONG
+```
+
+If Redis is not running, start it with:
+
+```bash
+sudo systemctl start redis-server
+```
+
+The application can use its JSON fallback when Redis is unavailable, but Redis is required for the shared JA3/JA3S/JA4/JA4S catalog, persistent analyst enrollments, and consistent behavior between the C++ engine and Python GUI.
+
 ### Build the C++ engine
 
 Run these commands from the repository root:
@@ -71,8 +100,6 @@ Click **Load PCAP File** and select a file under `code/pcaps`. Select an unknown
 source .venv/bin/activate
 python -m pytest code/python/tests -q
 ```
-
-The GUI and Python CLI continue to work with the JSON fallback if Redis is unavailable, but Redis is required for shared typed JA3/JA3S/JA4/JA4S records and analyst enrollment across runs.
 
 ### Import an approved external catalog
 
