@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+from datetime import datetime
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (
 from scapy.all import get_working_ifaces, wrpcap
 from src.db import FingerprintDB
 from workers import PcapWorker, LiveCaptureWorker
+from analytics import AnalyticsPanel
 
 class TlsMonitorGui(QMainWindow):
     def __init__(self, pythonEngineDir):
@@ -25,9 +27,22 @@ class TlsMonitorGui(QMainWindow):
         self.rowCache = []
         self.capturedPackets = []
         self.loadedPcapPath = None
-        mainWidget = QWidget()
-        self.setCentralWidget(mainWidget)
-        mainLayout = QVBoxLayout(mainWidget)
+
+        centralContainer = QWidget()
+        self.setCentralWidget(centralContainer)
+        rootLayout = QHBoxLayout(centralContainer)
+        rootLayout.setContentsMargins(0, 0, 0, 0)
+        rootLayout.setSpacing(0)
+
+        self.analyticsPanel = AnalyticsPanel(self)
+        self.analyticsPanel.setRowCache(self.rowCache)
+        rootLayout.addWidget(self.analyticsPanel)
+
+        contentWidget = QWidget()
+        mainLayout = QVBoxLayout(contentWidget)
+        mainLayout.setContentsMargins(8, 8, 8, 8)
+        rootLayout.addWidget(contentWidget)
+
         controlLayout = QHBoxLayout()
         self.loadButton = QPushButton("Load PCAP")
         self.loadButton.clicked.connect(self.selectPcapFile)
@@ -59,8 +74,14 @@ class TlsMonitorGui(QMainWindow):
         self.labelButton.clicked.connect(self.labelSelectedFingerprint)
         self.labelButton.setEnabled(False)
         controlLayout.addWidget(self.labelButton)
+
+        self.analyticsButton = QPushButton("Analytics")
+        self.analyticsButton.clicked.connect(self.toggleAnalytics)
+        controlLayout.addWidget(self.analyticsButton)
+
         controlLayout.addStretch()
         mainLayout.addLayout(controlLayout)
+
         self.dataTable = QTableWidget(0, 8)
         self.dataTable.setHorizontalHeaderLabels([
             "Role", "Source", "Destination", "SNI", "JA3 Hash", "JA4 Hash",
@@ -74,11 +95,22 @@ class TlsMonitorGui(QMainWindow):
         self.dataTable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.dataTable.itemSelectionChanged.connect(self.displayRowDetails)
         mainLayout.addWidget(self.dataTable)
+
+        detailsLayout = QHBoxLayout()
         self.detailsPane = QTextEdit()
         self.detailsPane.setReadOnly(True)
         self.detailsPane.setFixedHeight(120)
         self.detailsPane.setPlaceholderText("Select any handshake above to view raw metadata and JA3 string.")
-        mainLayout.addWidget(self.detailsPane)
+        detailsLayout.addWidget(self.detailsPane)
+
+        self.timestampLabel = QLabel("Timestamp: N/A")
+        self.timestampLabel.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        detailsLayout.addWidget(self.timestampLabel)
+
+        mainLayout.addLayout(detailsLayout)
+
+    def toggleAnalytics(self):
+        self.analyticsPanel.togglePanel()
 
     def populateInterfaces(self):
         self.interfaceDropdown.clear()
@@ -119,12 +151,14 @@ class TlsMonitorGui(QMainWindow):
             self.pcapWorker.rowExtracted.connect(self.appendTableRow)
             self.pcapWorker.errorOccurred.connect(lambda err: self.detailsPane.setText(f"Error: {err}"))
             self.pcapWorker.captureFinished.connect(self.onCaptureFinished)
+            self.analyticsPanel.refreshCharts()
             self.pcapWorker.start()
 
     def cancelPcapLoad(self):
         if self.pcapWorker and self.pcapWorker.isRunning():
             self.pcapWorker.stopCapture()
             self.detailsPane.append("\nPCAP loading cancelled.")
+            self.analyticsPanel.refreshCharts()
 
     def onCaptureFinished(self, statsSummary):
         self.loadButton.setEnabled(True)
@@ -132,12 +166,14 @@ class TlsMonitorGui(QMainWindow):
         self.cancelLoadButton.setEnabled(False)
         currentText = self.detailsPane.toPlainText()
         self.detailsPane.setText(f"{currentText}\n\nCapture Finished.\n{statsSummary}")
+        self.analyticsPanel.refreshCharts()
 
     def toggleLiveCapture(self):
         if self.liveWorker and self.liveWorker.isRunning():
             self.liveWorker.stopCapture()
             self.liveButton.setText("Start Live Capture")
             self.loadButton.setEnabled(True)
+            self.analyticsPanel.stopLiveUpdates()
         else:
             if self.pcapWorker and self.pcapWorker.isRunning():
                 return
@@ -156,6 +192,7 @@ class TlsMonitorGui(QMainWindow):
             self.liveButton.setText("Stop Live Capture")
             self.loadButton.setEnabled(False)
             self.cancelLoadButton.setEnabled(False)
+            self.analyticsPanel.startLiveUpdates()
 
     def clearRecords(self):
         self.dataTable.setRowCount(0)
@@ -163,7 +200,9 @@ class TlsMonitorGui(QMainWindow):
         self.capturedPackets.clear()
         self.loadedPcapPath = None
         self.detailsPane.clear()
+        self.timestampLabel.setText("Timestamp: N/A")
         self.labelButton.setEnabled(False)
+        self.analyticsPanel.refreshCharts()
 
     def savePcapFile(self):
         if not self.capturedPackets and not self.loadedPcapPath:
@@ -186,6 +225,9 @@ class TlsMonitorGui(QMainWindow):
             self.detailsPane.setText(f"Failed to save PCAP: {err}")
 
     def appendTableRow(self, packetData):
+        if "captureTime" not in packetData:
+            packetData["captureTime"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
         currentRow = self.dataTable.rowCount()
         self.dataTable.insertRow(currentRow)
         self.rowCache.append(packetData)
@@ -228,6 +270,9 @@ class TlsMonitorGui(QMainWindow):
                 f"Raw JA3:    {entry.get('ja3Raw', 'N/A')}"
             )
             self.detailsPane.setText(detailText)
+
+            capTime = entry.get("captureTime", "N/A")
+            self.timestampLabel.setText(f"Timestamp:\n{capTime}")
 
     def labelSelectedFingerprint(self):
         selectedRows = self.dataTable.selectionModel().selectedRows()
@@ -272,3 +317,4 @@ class TlsMonitorGui(QMainWindow):
                 newItem.setBackground(QColor(0, 255, 0, 20) if isClient else QColor(0, 0, 255, 20))
                 self.dataTable.setItem(rowIndex, targetColumn, newItem)
         self.displayRowDetails()
+        self.analyticsPanel.refreshCharts()
