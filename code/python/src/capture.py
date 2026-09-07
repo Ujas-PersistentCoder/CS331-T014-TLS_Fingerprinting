@@ -3,7 +3,7 @@ TLS Handshake capture and TCP reassembly module.
 
 Provides two entrypoints:
 - read_pcap(): Parse pcap/pcapng files offline
-- (future) live_capture(): Scapy-based live sniffing
+- live_capture(): Scapy-based live sniffing
 
 The TCPReassembler performs sequence-aware stream reassembly with:
 - Out-of-order segment buffering with a capped reorder window
@@ -27,6 +27,12 @@ from typing import Iterator
 
 import dpkt
 import socket
+import time
+
+try:
+    from scapy.all import conf, IP, IPv6, TCP
+except ImportError:
+    pass
 
 from src.parser import (
     ClientHelloFields,
@@ -477,3 +483,76 @@ def read_pcap(
                              type(e).__name__, e)
                 stats.packets_skipped += 1
                 continue
+
+# --- Live capture ---
+
+def live_capture(
+    interface: str,
+    stats: CaptureStats | None = None,
+) -> Iterator[TLSHandshakeResult]:
+    """
+    Live network sniffing, yield TLSHandshakeResult for each handshake found.
+    Requires root privileges.
+    """
+    if stats is None:
+        stats = CaptureStats()
+
+    reassembler = TCPReassembler(stats)
+    
+    try:
+        # L2socket reads raw packets from the interface. filter="tcp" uses BPF.
+        sock = conf.L2socket(iface=interface, filter="tcp")
+    except PermissionError:
+        raise PermissionError(f"Live capture on '{interface}' requires root privileges. Please run with sudo.")
+        
+    logger.info("Started live capture on interface %s", interface)
+
+    while True:
+        try:
+            pkt = sock.recv()
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            break
+            
+        if pkt is None:
+            continue
+            
+        try:
+            if IP in pkt:
+                ip_layer = pkt[IP]
+            elif IPv6 in pkt:
+                ip_layer = pkt[IPv6]
+            else:
+                continue
+
+            if TCP not in ip_layer:
+                continue
+
+            tcp = ip_layer[TCP]
+            
+            src_ip = ip_layer.src
+            dst_ip = ip_layer.dst
+            
+            payload = bytes(tcp.payload)
+            has_data = bool(payload)
+            has_control = bool(tcp.flags & (TCP_SYN | TCP_FIN | TCP_RST))
+            
+            if not has_data and not has_control:
+                continue
+                
+            ts = float(pkt.time) if hasattr(pkt, "time") else time.time()
+            
+            results = reassembler.process_packet(
+                src_ip, dst_ip,
+                tcp.sport, tcp.dport,
+                tcp.seq, int(tcp.flags),
+                payload if has_data else b'',
+                ts,
+            )
+            for res in results:
+                yield res
+                
+        except Exception as e:
+            logger.debug("Skipping malformed packet: %s: %s", type(e).__name__, e)
+            stats.packets_skipped += 1
