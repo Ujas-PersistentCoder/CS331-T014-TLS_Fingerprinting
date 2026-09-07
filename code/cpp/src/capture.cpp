@@ -18,6 +18,24 @@
 
 namespace tlsfp {
 
+namespace Color {
+    const std::string RESET   = "\033[0m";
+    const std::string BOLD    = "\033[1m";
+    const std::string DIM     = "\033[2m";
+    const std::string CYAN    = "\033[36m";
+    const std::string GREEN   = "\033[32m";
+    const std::string YELLOW  = "\033[33m";
+    const std::string BLUE    = "\033[34m";
+    const std::string MAGENTA = "\033[35m";
+    const std::string RED     = "\033[31m";
+    const std::string GRAY    = "\033[90m";
+    
+    // Status Badges
+    const std::string CLIENT_BADGE = "\033[1;37;44m CLIENT \033[0m"; // White text on Blue
+    const std::string SERVER_BADGE = "\033[1;37;42m SERVER \033[0m"; // White text on Green
+    const std::string MATCH_BADGE  = "\033[1;30;42m MATCH \033[0m";  // Black text on Green
+}
+
 namespace {
 
 std::string resolve_data_file(const std::string &requested,
@@ -37,9 +55,10 @@ std::string lookup_label(CaptureContext &ctx, FingerprintKind kind,
     if (!ctx.database->lookup(kind, hash, record)) {
         if (!ctx.prompt_unknown) return "<unknown>";
 
-        std::cout << "[?] Unknown " << FingerprintDatabase::kind_name(kind)
-                  << " fingerprint " << hash << ". Enter verified client/server name"
-                  << " (empty to skip): " << std::flush;
+        std::cout << Color::YELLOW << Color::BOLD << "[?]" << Color::RESET << " Unknown " 
+                  << Color::CYAN << FingerprintDatabase::kind_name(kind) << Color::RESET
+                  << " fingerprint " << Color::BOLD << hash << Color::RESET 
+                  << ". Enter verified client/server name (empty to skip): " << std::flush;
         std::string name;
         if (!std::getline(std::cin, name) || name.empty()) return "<unknown>";
         if (!ctx.database->enroll(kind, hash, name)) return "<unknown>";
@@ -59,48 +78,68 @@ inline std::string to_hex(uint16_t val) {
 }
 
 void print_verbose_client(const ClientHelloData &ch, const JA3Fingerprint &ja3, const JA4Fingerprint &ja4) {
-    std::cout << "   │  [V-Version]     " << to_hex(ch.client_version) << "\n"
-              << "   │  [V-SNI]         " << (ch.has_sni ? ch.sni : "<none>") << "\n"
-              << "   │  [V-ALPN]        " << (ch.first_alpn.empty() ? "<none>" : ch.first_alpn) << "\n"
-              << "   │  [V-Ciphers]     Count: " << ch.cipher_suites.size() << " [";
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+          << Color::CYAN << "[V-Version]     " << Color::RESET
+          << Color::YELLOW << to_hex(ch.client_version) << Color::RESET << "\n"
+
+          << Color::GRAY << "   │  " << Color::RESET
+          << Color::CYAN << "[V-SNI]         " << Color::RESET
+          << (ch.has_sni ? Color::GREEN : Color::GRAY)
+          << (ch.has_sni ? ch.sni : std::string_view("<none>"))
+          << Color::RESET << "\n"
+
+          << Color::GRAY << "   │  " << Color::RESET
+          << Color::CYAN << "[V-ALPN]        " << Color::RESET
+          << (ch.first_alpn.empty() ? Color::GRAY : Color::MAGENTA)
+          << (ch.first_alpn.empty() ? std::string_view("<none>") : ch.first_alpn)
+          << Color::RESET << "\n"
+
+          << Color::GRAY << "   │  " << Color::RESET
+          << Color::CYAN << "[V-Ciphers]     " << Color::RESET
+          << Color::DIM << "Count: " << Color::RESET
+          << Color::BOLD << ch.cipher_suites.size() << Color::RESET << " [";
     for (size_t i = 0; i < ch.cipher_suites.size(); ++i) {
-        if (i > 0) std::cout << ", ";
-        std::cout << to_hex(ch.cipher_suites[i]);
+        if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
+        std::cout << Color::YELLOW << to_hex(ch.cipher_suites[i]) << Color::RESET;
     }
-    std::cout << "]\n   │  [V-Extensions]  Count: " << ch.extensions.size() << " [";
+    std::cout << "]\n" << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-Extensions]  " << Color::RESET << Color::DIM << "Count: " << Color::RESET << Color::BOLD << ch.extensions.size() << Color::RESET << " [";
     for (size_t i = 0; i < ch.extensions.size(); ++i) {
-        if (i > 0) std::cout << ", ";
-        std::cout << to_hex(ch.extensions[i]);
+        if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
+        std::cout << Color::YELLOW << to_hex(ch.extensions[i]) << Color::RESET;
     }
-    std::cout << "]\n   │  [V-Curves]      Count: " << ch.supported_groups.size() << " [";
+    std::cout << "]\n" << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-Curves]      " << Color::RESET << Color::DIM << "Count: " << Color::RESET << Color::BOLD << ch.supported_groups.size() << Color::RESET << " [";
     for (size_t i = 0; i < ch.supported_groups.size(); ++i) {
-        if (i > 0) std::cout << ", ";
-        std::cout << to_hex(ch.supported_groups[i]);
+        if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
+        std::cout << Color::YELLOW << to_hex(ch.supported_groups[i]) << Color::RESET;
     }
-    std::cout << "]\n   │  [V-SigAlgs]     Count: " << ch.signature_algorithms.size() << " [";
+    std::cout << "]\n" << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-SigAlgs]     " << Color::RESET << Color::DIM << "Count: " << Color::RESET << Color::BOLD << ch.signature_algorithms.size() << Color::RESET << " [";
     for (size_t i = 0; i < ch.signature_algorithms.size(); ++i) {
-        if (i > 0) std::cout << ", ";
-        std::cout << to_hex(ch.signature_algorithms[i]);
+        if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
+        std::cout << Color::YELLOW << to_hex(ch.signature_algorithms[i]) << Color::RESET;
     }
     std::cout << "]\n"
-              << "   │  [V-PreHash-JA3] " << ja3.raw_string << "\n"
-              << "   │  [V-PreHash-JA4b]" << ja4.raw_ja4_b << "\n"
-              << "   │  [V-PreHash-JA4c]" << ja4.raw_ja4_c << "\n";
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-PreHash-JA3] " << Color::RESET << Color::DIM << ja3.raw_string << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-PreHash-JA4b]" << Color::RESET << Color::DIM << ja4.raw_ja4_b << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-PreHash-JA4c]" << Color::RESET << Color::DIM << ja4.raw_ja4_c << Color::RESET << "\n";
 }
 
 void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s, const JA4Fingerprint &ja4s) {
-    std::cout << "   │  [V-WireVersion] " << to_hex(sh.server_version) << "\n"
-              << "   │  [V-Negotiated]  " << to_hex(sh.selected_version) << "\n"
-              << "   │  [V-Cipher]      " << to_hex(sh.selected_cipher) << "\n"
-              << "   │  [V-ALPN]        " << (sh.first_alpn.empty() ? "<none>" : sh.first_alpn) << "\n"
-              << "   │  [V-Extensions]  Count: " << sh.extensions.size() << " [";
+    std::cout << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-WireVersion] " << Color::RESET << Color::YELLOW << to_hex(sh.server_version) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-Negotiated]  " << Color::RESET << Color::YELLOW << to_hex(sh.selected_version) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-Cipher]      " << Color::RESET << Color::YELLOW << to_hex(sh.selected_cipher) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-ALPN]        " << Color::RESET << (sh.first_alpn.empty() ? Color::GRAY : Color::MAGENTA)
+<< (sh.first_alpn.empty()
+        ? std::string_view("<none>")
+        : sh.first_alpn)
+<< Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-Extensions]  " << Color::RESET << Color::DIM << "Count: " << Color::RESET << Color::BOLD << sh.extensions.size() << Color::RESET << " [";
     for (size_t i = 0; i < sh.extensions.size(); ++i) {
-        if (i > 0) std::cout << ", ";
-        std::cout << to_hex(sh.extensions[i]);
+        if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
+        std::cout << Color::YELLOW << to_hex(sh.extensions[i]) << Color::RESET;
     }
     std::cout << "]\n"
-              << "   │  [V-PreHash-JA3S]" << ja3s.raw_string << "\n"
-              << "   │  [V-PreHash-JA4S]" << ja4s.raw_ja4_c << "\n";
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-PreHash-JA3S]" << Color::RESET << Color::DIM << ja3s.raw_string << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << "[V-PreHash-JA4S]" << Color::RESET << Color::DIM << ja4s.raw_ja4_c << Color::RESET << "\n";
 }
 
 } // namespace
@@ -378,20 +417,58 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
                 const std::string ja3_match = lookup_label(*ctx, FingerprintKind::JA3, ja3.md5_hash);
                 const std::string ja4_match = lookup_label(*ctx, FingerprintKind::JA4, ja4.full_fp);
 
-                std::cout << "[+] Captured ClientHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
-                          << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
-                          << " | Reassembled Size: " << total_record_len << " bytes\n";
+                std::cout << "\n"
+                << Color::CLIENT_BADGE << " "
+                << Color::BOLD << "Captured ClientHello"
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "Flow          "
+                << Color::RESET
+                << Color::CYAN << "[" << src_ip_str << "]:" << ntohs(key.src_port)
+                << Color::GRAY << " → "
+                << Color::CYAN << "[" << dst_ip_str << "]:" << ntohs(key.dst_port)
+                << Color::RESET << "\n"
+                << Color::GRAY << "  └─ " << Color::RESET
+                << Color::BOLD << "Reassembled   "
+                << Color::RESET
+                << total_record_len << " bytes\n";
 
                 if (ctx->verbose) {
                     print_verbose_client(ctx->client_scratchpad, ja3, ja4);
                 }
 
-                std::cout << "  ├─ [SNI]        " << (ctx->client_scratchpad.has_sni ? ctx->client_scratchpad.sni : "<none>") << "\n"
-                          << "  ├─ [JA3 String] " << ja3.raw_string << "\n"
-                          << "  ├─ [JA3 Hash]   " << ja3.md5_hash << "\n"
-                          << "  ├─ [JA3 Match]  " << ja3_match << "\n"
-                          << "  ├─ [JA4]        " << ja4.full_fp << "\n"
-                          << "  └─ [JA4 Match]  " << ja4_match << "\n";
+                std::cout << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "SNI           "
+                << Color::RESET
+                << (ctx->client_scratchpad.has_sni
+                        ? ctx->client_scratchpad.sni
+                        : "<none>")
+                << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA3 String     "
+                << Color::RESET
+                << Color::MAGENTA << ja3.raw_string
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA3 Hash       "
+                << Color::RESET
+                << Color::MAGENTA << ja3.md5_hash
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA3 Match      "
+                << Color::RESET
+                << Color::GREEN << ja3_match
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA4            "
+                << Color::RESET
+                << Color::MAGENTA << ja4.full_fp
+                << Color::RESET << "\n"
+                << Color::GRAY << "  └─ " << Color::RESET
+                << Color::BOLD << "JA4 Match      "
+                << Color::RESET
+                << Color::GREEN << ja4_match
+                << Color::RESET << "\n";
             }
 
             if (ctx->dumper) {
@@ -410,19 +487,51 @@ void packet_callback(u_char *user_data, const struct pcap_pkthdr *pkthdr, const 
                 const std::string ja3s_match = lookup_label(*ctx, FingerprintKind::JA3S, ja3s.md5_hash);
                 const std::string ja4s_match = lookup_label(*ctx, FingerprintKind::JA4S, ja4s.full_fp);
 
-                std::cout << "[+] Captured ServerHello | Flow: [" << src_ip_str << "]:" << ntohs(key.src_port)
-                          << " -> [" << dst_ip_str << "]:" << ntohs(key.dst_port)
-                          << " | Reassembled Size: " << total_record_len << " bytes\n";
+                std::cout << "\n"
+                        << Color::SERVER_BADGE << " "
+                        << Color::BOLD << "Captured ServerHello"
+                        << Color::RESET << "\n"
+                        << Color::GRAY << "  ├─ " << Color::RESET
+                        << Color::BOLD << "Flow          "
+                        << Color::RESET
+                        << Color::CYAN << "[" << src_ip_str << "]:" << ntohs(key.src_port)
+                        << Color::GRAY << " → "
+                        << Color::CYAN << "[" << dst_ip_str << "]:" << ntohs(key.dst_port)
+                        << Color::RESET << "\n"
+                        << Color::GRAY << "  └─ " << Color::RESET
+                        << Color::BOLD << "Reassembled   "
+                        << Color::RESET
+                        << total_record_len << " bytes\n";
 
                 if (ctx->verbose) {
                     print_verbose_server(ctx->server_scratchpad, ja3s, ja4s);
                 }
 
-                std::cout << "  ├─ [JA3S String] " << ja3s.raw_string << "\n"
-                          << "  ├─ [JA3S Hash]   " << ja3s.md5_hash << "\n"
-                          << "  ├─ [JA3S Match]  " << ja3s_match << "\n"
-                          << "  ├─ [JA4S]        " << ja4s.full_fp << "\n"
-                          << "  └─ [JA4S Match]  " << ja4s_match << "\n";
+                std::cout << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA3S String    "
+                << Color::RESET
+                << Color::MAGENTA << ja3s.raw_string
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA3S Hash      "
+                << Color::RESET
+                << Color::MAGENTA << ja3s.md5_hash
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA3S Match     "
+                << Color::RESET
+                << Color::GREEN << ja3s_match
+                << Color::RESET << "\n"
+                << Color::GRAY << "  ├─ " << Color::RESET
+                << Color::BOLD << "JA4S           "
+                << Color::RESET
+                << Color::MAGENTA << ja4s.full_fp
+                << Color::RESET << "\n"
+                << Color::GRAY << "  └─ " << Color::RESET
+                << Color::BOLD << "JA4S Match     "
+                << Color::RESET
+                << Color::GREEN << ja4s_match
+                << Color::RESET << "\n";
             }
 
             if (ctx->dumper) {
@@ -444,7 +553,12 @@ bool start_capture(const CaptureOptions &opts) {
                       << opts.read_filename << "': " << errbuf << "\n";
             return false;
         }
-        std::cout << "[*] Reading from offline capture: " << opts.read_filename << "\n";
+        std::cout << Color::CYAN << Color::BOLD
+          << "[>] Offline capture"
+          << Color::RESET
+          << "  " << Color::GRAY
+          << opts.read_filename
+          << Color::RESET << "\n";
     } else {
         if (opts.interface_name.empty()) {
             std::cerr << "[-] Error: Interface name must be specified for live capture.\n";
@@ -458,7 +572,12 @@ bool start_capture(const CaptureOptions &opts) {
             return false;
         }
         if (!opts.quiet) {
-            std::cout << "[*] Live capture started on interface: " << opts.interface_name << "\n";
+            std::cout << Color::GREEN << Color::BOLD
+          << "[✓] Live capture started"
+          << Color::RESET
+          << "  Interface: "
+          << Color::CYAN << opts.interface_name
+          << Color::RESET << "\n";
         }
     }
 
@@ -482,7 +601,12 @@ bool start_capture(const CaptureOptions &opts) {
     ctx.quiet = opts.quiet;
     ctx.verbose = opts.verbose;
     if (!opts.quiet) {
-        std::cout << "[*] Capture initialized. Datalink type: " << ctx.link_type << "\n";
+        std::cout << Color::GREEN << Color::BOLD
+          << "[✓] Capture initialized"
+          << Color::RESET
+          << "  Datalink: "
+          << Color::CYAN << ctx.link_type
+          << Color::RESET << "\n";
 
         // Connect to Redis and load seeds ONLY in interactive/standard mode
         ctx.database = std::make_unique<FingerprintDatabase>(opts.redis_config);
@@ -512,7 +636,12 @@ bool start_capture(const CaptureOptions &opts) {
             std::cerr << "[-] Warning: Could not open output PCAP for writing: " 
                       << pcap_geterr(handle) << "\n";
         } else {
-            std::cout << "[*] Mirroring handshakes to: " << opts.write_filename << "\n";
+            std::cout << Color::CYAN << Color::BOLD
+          << "[→] Mirroring handshakes"
+          << Color::RESET
+          << "  Output: "
+          << Color::CYAN << opts.write_filename
+          << Color::RESET << "\n";
         }
     }
 
@@ -527,21 +656,46 @@ bool start_capture(const CaptureOptions &opts) {
     double pps = (elapsed_sec > 0.0) ? (static_cast<double>(ctx.total_packets) / elapsed_sec) : 0.0;
     bool success = (loop_status != -1);
     if (opts.quiet) {
-        std::cout << "=================== TLSFP Benchmark Summary ===================\n"
-                  << " Total Packets Scanned : " << ctx.total_packets << "\n"
-                  << " ClientHellos Found    : " << ctx.client_hellos << "\n"
-                  << " ServerHellos Found    : " << ctx.server_hellos << "\n"
-                  << " Execution Time        : " << elapsed_ms << " ms\n"
-                  << " Packet Throughput     : " << static_cast<uint64_t>(pps) << " pkts/sec\n"
-                  << "===============================================================\n";
+        std::cout << "\n"
+          << Color::CYAN << Color::BOLD
+          << "╭──────────────────── TLSFP Benchmark ────────────────────╮"
+          << Color::RESET << "\n"
+          << Color::BOLD << "│ " << Color::RESET
+          << "Total Packets Scanned : "
+          << Color::CYAN << ctx.total_packets
+          << Color::RESET << "\n"
+          << Color::BOLD << "│ " << Color::RESET
+          << "ClientHellos Found    : "
+          << Color::CYAN << ctx.client_hellos
+          << Color::RESET << "\n"
+          << Color::BOLD << "│ " << Color::RESET
+          << "ServerHellos Found    : "
+          << Color::CYAN << ctx.server_hellos
+          << Color::RESET << "\n"
+          << Color::BOLD << "│ " << Color::RESET
+          << "Execution Time        : "
+          << Color::CYAN << elapsed_ms
+          << Color::RESET << " ms\n"
+          << Color::BOLD << "│ " << Color::RESET
+          << "Packet Throughput     : "
+          << Color::GREEN
+          << static_cast<uint64_t>(pps)
+          << Color::RESET << " pkts/sec\n"
+          << Color::CYAN << Color::BOLD
+          << "╰───────────────────────────────────────────────────────────╯"
+          << Color::RESET << "\n";
     } else {
         if (loop_status == -1) {
             std::cerr << "[-] pcap_loop aborted due to error: " << pcap_geterr(handle) << "\n";
             success = false;
         } else if (loop_status == -2) {
-            std::cout << "[*] Capture terminated by signal.\n";
+            std::cout << Color::YELLOW << Color::BOLD
+          << "[!] Capture terminated by signal."
+          << Color::RESET << "\n";
         } else {
-            std::cout << "[*] Reached end of capture file.\n";
+            std::cout << Color::GREEN << Color::BOLD
+          << "[✓] Reached end of capture file."
+          << Color::RESET << "\n";
         }
     }
 

@@ -1,0 +1,10 @@
+pcap,cpp_packets,py_packets,cpp_engine_median_ms,py_engine_median_ms,cpp_pkts_per_sec,py_pkts_per_sec,cpp_speedup_x,cpp_client_hellos,py_client_hellos,cpp_server_hellos,py_server_hellos,handshakes_match
+test_reassembly.pcap,10,10,0.7144,0.6911,13998.2,14468.7,1.0,5,5,5,5,True
+captured_handshakes.pcap,75,75,0.7019,1.3251,106850.3,56597.5,1.9,2,2,26,26,True
+cloudflare_run1.pcap,2655,1877,1.1338,20.1142,2341610.6,93317.0,17.7,11,11,11,11,True
+curl.pcap,1208,938,0.8769,8.3925,1377554.2,111766.2,9.6,1,1,1,1,True
+python_requests.pcap,356,223,0.7007,2.5963,508072.8,85891.7,3.7,1,1,1,1,True
+custom_client.pcap,133,105,0.6649,1.2897,200037.6,81416.4,1.9,1,1,1,1,True
+chrome.pcap,630,353,0.7415,4.5263,849628.6,77989.5,6.1,4,4,4,4,True
+chrome_run2.pcap,591,352,0.7287,4.3104,811047.3,81662.2,5.9,3,3,3,3,True
+benchmark/cloudflare_x100.pcap,265500,187700,68.4464,2263.8477,3878947.6,82911.9,33.1,1100,1100,1100,1001,False

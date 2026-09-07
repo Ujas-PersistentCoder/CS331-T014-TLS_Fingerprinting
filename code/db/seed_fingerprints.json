@@ -62,6 +62,51 @@
       "category": "cli",
       "source": "self-captured: controlled_curl.pcap",
       "notes": "Generated with curl against the local OpenSSL s_server on loopback."
+    },
+    {
+      "hash": "a3afc2c46ba4a7d7fbe1cfb7a3031c2f",
+      "client": "OpenSSL s_client",
+      "version": "3.x default",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: client_openssl.pcap",
+      "notes": "Observed from the current OpenSSL s_client capture."
+    },
+    {
+      "hash": "d39e1be3241d516b1f714bd47c2bc968",
+      "client": "Python ssl module (default context)",
+      "version": "current runtime",
+      "os": "linux",
+      "category": "library",
+      "source": "self-captured: client_python_ssl.pcap",
+      "notes": "Observed from the current Python ssl capture."
+    },
+    {
+      "hash": "4a88fbfd71c825f3ad4eafac4f3c043a",
+      "client": "Chromium",
+      "version": "current Chromium capture",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: client_chromium.pcap",
+      "notes": "GREASE/randomization variant of the current Chromium ClientHello."
+    },
+    {
+      "hash": "863ca3156175d386f6999c588aae5963",
+      "client": "Chromium",
+      "version": "current Chromium capture",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: client_chromium.pcap",
+      "notes": "GREASE/randomization variant of the current Chromium ClientHello."
+    },
+    {
+      "hash": "b4b273376bc1836cf13b53290172a09b",
+      "client": "Chromium",
+      "version": "current Chromium capture",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: client_chromium.pcap",
+      "notes": "GREASE/randomization variant of the current Chromium ClientHello."
     }
   ],
   "ja3s": [
@@ -170,6 +215,60 @@
       "category": "application",
       "source": "self-captured: cloudflare_run1.pcap",
       "notes": "JA4 correlated with the known JA3 catalog entry ecdf4f49dd59effc439639da29186671"
+    },
+    {
+      "hash": "t13d3013h2_1d37bd780c83_8537cf56674e",
+      "client": "curl (Modern)",
+      "version": "unknown",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: cloudflare_run1.pcap",
+      "notes": "JA4 paired with the known JA3 catalog entry 7a73fb0bdeaa2a79fadf356c34e7577e."
+    },
+    {
+      "hash": "t13d2013h2_a09f3c656075_7f0f34a4126d",
+      "client": "VS Code Update Client",
+      "version": "unknown",
+      "os": "linux",
+      "category": "application",
+      "source": "self-captured: cloudflare_run1.pcap",
+      "notes": "JA4 paired with the known JA3 catalog entry ecdf4f49dd59effc439639da29186671."
+    },
+    {
+      "hash": "t13d311000_e8f1e7e78f70_1f22a2ca17c4",
+      "client": "OpenSSL s_client",
+      "version": "3.x default",
+      "os": "linux",
+      "category": "cli",
+      "source": "self-captured: client_openssl.pcap",
+      "notes": "Observed from the current OpenSSL s_client capture."
+    },
+    {
+      "hash": "t13d311100_e8f1e7e78f70_d41ae481755e",
+      "client": "Python ssl module (default context)",
+      "version": "current runtime",
+      "os": "linux",
+      "category": "library",
+      "source": "self-captured: client_python_ssl.pcap",
+      "notes": "Observed from the current Python ssl capture."
+    },
+    {
+      "hash": "t13d3112h1_e8f1e7e78f70_b26ce05bbdd6",
+      "client": "Python requests/urllib3",
+      "version": "current runtime",
+      "os": "linux",
+      "category": "library",
+      "source": "self-captured: client_requests.pcap",
+      "notes": "JA3 overlaps with curl in this environment; JA4 distinguishes the requests/urllib3 handshake."
+    },
+    {
+      "hash": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+      "client": "Chromium",
+      "version": "current Chromium capture",
+      "os": "linux",
+      "category": "browser",
+      "source": "self-captured: client_chromium.pcap",
+      "notes": "Stable JA4 observed across three Chromium ClientHello variants."
     },
     {
       "hash": "t13i181000_85036bcba153_d41ae481755e",
