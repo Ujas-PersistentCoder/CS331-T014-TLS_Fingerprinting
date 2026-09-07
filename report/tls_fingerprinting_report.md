@@ -10,7 +10,7 @@
 
 TLS encrypts application data, but it cannot encrypt the negotiation that sets up that encryption. Before a client and server agree on a shared secret, they exchange two plaintext messages — the `ClientHello` and the `ServerHello` — that clearly list which protocol versions, cipher suites, extensions, elliptic curves, and point formats each side is willing to use. A passive observer sitting anywhere on the network path can read these fields without possessing any keys, without performing a man-in-the-middle attack, and without violating the confidentiality guarantees of TLS at all.
 
-**TLS fingerprinting** is the practice of taking these plaintext fields, arranging them in a canonical order, and hashing them into a short, stable identifier. Because different TLS _implementations_ (not different users) construct their ClientHello differently — Chrome's list of ciphers is not the same as curl's, neither Python's `ssl` module's, nor a Go binary's. This hash acts as a signature for the software stack generating the traffic, entirely independent of IP address, User-Agent header, or any other application-layer signal.
+**TLS fingerprinting** is the practice of taking these plaintext fields, arranging them in a canonical order, and hashing them into a short, stable identifier. Because different TLS _implementations_ (not different users) construct their ClientHello differently — Chrome's list of ciphers is not the same as curl's, neither Python's `ssl` module's, nor a Go binary's — this hash acts as a stable signature for the client software stack. This hash acts as a signature for the software stack generating the traffic, entirely independent of IP address, User-Agent header, or any other application-layer signal.
 
 This project implements two such fingerprinting schemes in two languages, against both offline PCAP files and live traffic:
 
@@ -149,7 +149,7 @@ After a more careful pass, we fixed both: the C++ engine now explicitly strips t
 - **Dataclasses (Python) vs. mutable scratchpad structs (C++)**: Python parses into frozen, immutable `ClientHelloFields`/`ServerHelloFields` per handshake — clean, GC-managed, but one allocation per handshake. C++ reuses a single mutable `ClientHelloData`/`ServerHelloData` scratchpad via `clear()` across the entire capture, avoiding per-packet heap allocation entirely, which matters at the throughput C++ operates at (see §5).
 - **Parser modularity trade-off**: Python separates `parse_tls_record()` / `parse_handshake_header()` / `parse_client_hello()` into independently unit-testable functions. C++ inlines all three into two functions for instruction-cache locality. This is a direct language-appropriate trade: Python's separation buys us the `test_parser.py` granularity; C++'s inlining buys throughput.
 
-## Most of the remaining pipeline is a faithful reproduction of a well-specified, elaborate calculation (JA3/JA4 are fully specified externally) — due to which record/handshake parsing and reassembly were solid. The value being demonstrated here is _correct implementation of a known-hard byte-level protocol_.
+ Most of the remaining pipeline is a faithful reproduction of well-specified external calculations (JA3 and JA4). Once record framing, TCP reassembly, and TLV dissection were verified solid, the engineering challenge centered on zero-copy execution and wire correctness rather than algorithmic invention.
 
 ## 4. Implementation: Python vs. C++ Engines
 
@@ -237,6 +237,14 @@ TLS fingerprinting's value comes from one fact: the encrypted payload tells you 
 - **Larger, continuously updated reference database**: ingest broader community/threat-intel feeds (e.g. full `ja3er.com` dumps, live FoxIO JA4+ updates) rather than our current bounded manifest, to reduce the "Unknown" rate documented in §6.2(f).
 - **Cross-platform C++ engine**: abstract the libpcap-specific and POSIX-specific (`sigaction`, raw socket RESP client) code behind a platform layer to support Windows via Npcap.
 - **Statistical/ML-based fingerprint clustering**: rather than exact-hash lookup, cluster near-identical fingerprints (e.g. same client, different TLS library minor version) to reduce false "Unknown" classifications from minor version drift.
+
+## 8. References & Standards
+
+1. **RFC 8446:** The Transport Layer Security (TLS) Protocol Version 1.3 (Middlebox Compatibility & Handshake Framing).
+2. **RFC 8701:** Applying Generate Random Extensions And Sustain Extensibility (GREASE) to TLS Extensibility.
+3. **RFC 1982:** Serial Number Arithmetic (TCP Sequence Space Reassembly).
+4. **Althouse, J., et al. (Salesforce, 2017):** *JA3/JA3S — Open-source TLS Fingerprinting Specification.* GitHub: `salesforce/ja3`.
+5. **Brotherston, J. (FoxIO, 2023):** *JA4+ Network Fingerprinting Suite.* GitHub: `FoxIO-LLC/ja4`.
 
 ---
 
