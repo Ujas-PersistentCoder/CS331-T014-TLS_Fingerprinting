@@ -19,7 +19,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, TextIO
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "code" / "python"))
@@ -29,6 +29,7 @@ from src.db import FINGERPRINT_KINDS, FingerprintDB, FingerprintRecord  # type: 
 
 JA3_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 JA4_PATTERN = re.compile(r"^[0-9a-zA-Z_]+$")
+FOXIO_MAPPING_URL = "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv"
 
 
 def normalize_record(raw: dict[str, Any], kind: str, source: str) -> FingerprintRecord | None:
@@ -92,15 +93,51 @@ def read_csv(path: Path) -> Iterable[FingerprintRecord]:
                 yield record
 
 
+def read_foxio_csv(input_file: TextIO) -> Iterable[FingerprintRecord]:
+    """Read FoxIO's ja4plus-mapping.csv format."""
+    for row in csv.DictReader(input_file):
+        label = next(
+            (
+                str(row.get(field, "")).replace("\n", " ").strip()
+                for field in ("Application", "Library", "Device")
+                if str(row.get(field, "")).strip()
+            ),
+            "",
+        )
+        if not label:
+            continue
+
+        metadata = {
+            "name": label,
+            "os": str(row.get("OS", "")).replace("\n", " ").strip(),
+            "category": "foxio-ja4-mapping",
+            "source": FOXIO_MAPPING_URL,
+            "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic.",
+        }
+        for kind, field, role in (("ja4", "ja4", "client"), ("ja4s", "ja4s", "server")):
+            hash_value = str(row.get(field, "")).strip()
+            # q-prefixed rows are QUIC fingerprints and are outside this TCP tool.
+            if not hash_value or not hash_value.startswith("t"):
+                continue
+            record = normalize_record({**metadata, "hash": hash_value, "role": role}, kind, FOXIO_MAPPING_URL)
+            if record is not None:
+                yield record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import external TLS fingerprints into Redis")
     parser.add_argument("input", type=Path, help="Approved JSON or CSV catalog")
+    parser.add_argument("--foxio", action="store_true", help="Read FoxIO ja4plus-mapping.csv format")
     parser.add_argument("--redis-url", default="redis://127.0.0.1:6379/0")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing Redis records")
     args = parser.parse_args()
 
     if args.input.suffix.lower() == ".csv":
-        records = read_csv(args.input)
+        if args.foxio:
+            with args.input.open("r", encoding="utf-8", newline="") as input_file:
+                records = list(read_foxio_csv(input_file))
+        else:
+            records = read_csv(args.input)
     elif args.input.suffix.lower() == ".json":
         records = read_json(args.input)
     else:
