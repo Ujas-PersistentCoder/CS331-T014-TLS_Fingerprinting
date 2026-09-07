@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
             case 'r': opts.read_filename  = optarg; break;
             case 'w': opts.write_filename = optarg; break;
             case 'f': opts.bpf_filter     = optarg; break;
-            case 'u': opts.interactive    = true;   break;
+            case 'u': opts.prompt_unknown = true;   break;
             case 'q': opts.quiet          = true;   break;
             case 'v': opts.verbose        = true;   break;
             case 'h': print_usage(argv[0]); return 0;

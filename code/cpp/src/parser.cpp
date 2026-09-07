@@ -78,7 +78,7 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                         uint8_t name_type = sni_reader.read_u8();
                         uint16_t name_len = sni_reader.read_u16();
                         // 0 = host_name per RFC 6066
-                        if (name_type == 0 && list_len >= 3 && name_len >= 0 && name_len <= list_len - 3 && sni_reader.has_bytes(name_len)) {
+                        if (name_type == 0 && list_len >= 3 && name_len <= list_len - 3 && sni_reader.has_bytes(name_len)) {
                             out.has_sni = true;
                             // Zerocopy std::string_view eliminates heap allocation
                             out.sni = std::string_view(reinterpret_cast<const char*>(sni_reader.data + sni_reader.offset), name_len);
