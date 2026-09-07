@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tlsfp {
@@ -70,6 +72,8 @@ private:
 
 	RedisConfig config_;
 	int socket_{-1};
+	std::unordered_map<std::string, FingerprintRecord> cache_;
+	std::unordered_set<std::string> missing_cache_;
 };
 
 } // namespace tlsfp

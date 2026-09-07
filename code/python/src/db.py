@@ -34,6 +34,7 @@ class FingerprintDB:
         self._path = Path(db_path)
         self._data: dict[str, str] = {}
         self._redis: Any | None = None
+        self._cache: dict[tuple[str, str], FingerprintRecord | None] = {}
         self._load()
 
         if use_redis and self.connect(redis_url):
@@ -112,11 +113,25 @@ class FingerprintDB:
 
     def lookup_record(self, hash_str: str, kind: str | None = None) -> FingerprintRecord | None:
         kinds = (kind,) if kind else FINGERPRINT_KINDS
+        for candidate_kind in kinds:
+            cache_key = (candidate_kind, hash_str)
+            if cache_key in self._cache:
+                cached = self._cache[cache_key]
+                if cached is not None:
+                    return cached
+                continue
         if self._redis is not None:
             try:
                 for candidate_kind in kinds:
+                    cache_key = (candidate_kind, hash_str)
+                    if cache_key in self._cache:
+                        cached = self._cache[cache_key]
+                        if cached is not None:
+                            return cached
+                        continue
                     fields = self._redis.hgetall(self._redis_key(candidate_kind, hash_str))
                     record = self._record_from_fields(candidate_kind, fields)
+                    self._cache[cache_key] = record
                     if record is not None:
                         return record
             except Exception:
@@ -134,6 +149,7 @@ class FingerprintDB:
     def store_record(self, record: FingerprintRecord) -> None:
         if self._redis is not None:
             self._redis.hset(self._redis_key(record.kind, record.hash), mapping=asdict(record))
+        self._cache[(record.kind, record.hash)] = record
 
     def store(self, hash_str: str, label: str, kind: str | None = None) -> None:
         """Store a legacy label and optionally persist a typed Redis record."""
@@ -174,6 +190,8 @@ class FingerprintDB:
         manifest = self._load_manifest(manifest_path)
         loaded = 0
 
+        pipeline = self._redis.pipeline(transaction=False)
+        pending = 0
         for kind in FINGERPRINT_KINDS:
             entries = seed_data.get(kind, [])
             for entry in entries:
@@ -192,8 +210,12 @@ class FingerprintDB:
                     notes=str(entry.get("notes", "")),
                 )
                 record = self._enrich_from_manifest(record, manifest)
-                self.store_record(record)
+                pipeline.hset(self._redis_key(record.kind, record.hash), mapping=asdict(record))
+                self._cache[(record.kind, record.hash)] = record
+                pending += 1
                 loaded += 1
+        if pending:
+            pipeline.execute()
         return loaded
 
     def load_legacy_file(self, legacy_path: str | Path) -> int:
@@ -203,21 +225,33 @@ class FingerprintDB:
 
         with Path(legacy_path).open("r", encoding="utf-8") as legacy_file:
             entries = json.load(legacy_file)
-        loaded = 0
-        for hash_str, name in entries.items():
-            if len(str(hash_str)) != 32 or self.lookup_record(str(hash_str), "ja3") is not None:
-                continue
-            self.store_record(
-                FingerprintRecord(
-                    kind="ja3",
-                    hash=str(hash_str),
-                    role="client",
-                    name=str(name),
-                    category="public-catalog",
-                    source=str(legacy_path),
-                )
+        candidates = {
+            str(hash_str): FingerprintRecord(
+                kind="ja3",
+                hash=str(hash_str),
+                role="client",
+                name=str(name),
+                category="public-catalog",
+                source=str(legacy_path),
             )
+            for hash_str, name in entries.items()
+            if len(str(hash_str)) == 32
+        }
+        exists_pipeline = self._redis.pipeline(transaction=False)
+        for hash_str in candidates:
+            exists_pipeline.exists(self._redis_key("ja3", hash_str))
+        existing = exists_pipeline.execute()
+
+        write_pipeline = self._redis.pipeline(transaction=False)
+        loaded = 0
+        for (hash_str, record), already_exists in zip(candidates.items(), existing):
+            if already_exists:
+                continue
+            write_pipeline.hset(self._redis_key("ja3", hash_str), mapping=asdict(record))
+            self._cache[("ja3", hash_str)] = record
             loaded += 1
+        if loaded:
+            write_pipeline.execute()
         return loaded
 
     @staticmethod
