@@ -214,20 +214,26 @@ class TlsMonitorGui(QMainWindow):
             return
 
         try:
-            self.fingerprintDb.enroll(
-                entry["fingerprintHash"],
-                entry.get("fingerprintKind", "ja3"),
-                label,
+            pair = (
+                ("ja3", "ja3Hash", "ja3Match", 3),
+                ("ja4", "ja4Hash", "ja4Match", 4),
             )
+            if entry.get("fingerprintKind") == "ja3s":
+                pair = (
+                    ("ja3s", "ja3Hash", "ja3Match", 3),
+                    ("ja4s", "ja4Hash", "ja4Match", 4),
+                )
+            for kind, hash_key, match_key, _ in pair:
+                if entry.get(match_key) == "Unknown":
+                    self.fingerprintDb.enroll(entry[hash_key], kind, label)
         except (OSError, ValueError) as error:
             self.detailsPane.setText(f"Could not save fingerprint: {error}")
             return
 
-        target_match = "ja3Match" if entry.get("fingerprintKind") == "ja3" else "ja4Match"
-        entry[target_match] = label.strip()
-        target_column = 5 if target_match == "ja3Match" else 6
-        
-        newItem = QTableWidgetItem(entry[target_match])
-        newItem.setFlags(newItem.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.dataTable.setItem(rowIndex, target_column, newItem)
+        for match_key, target_column in (("ja3Match", 5), ("ja4Match", 6)):
+            if entry.get(match_key) == "Unknown":
+                entry[match_key] = label.strip()
+                newItem = QTableWidgetItem(entry[match_key])
+                newItem.setFlags(newItem.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.dataTable.setItem(rowIndex, target_column, newItem)
         self.displayRowDetails()
