@@ -93,16 +93,17 @@ def main():
         raise SystemExit("No matching pcaps between the two result files -- nothing to compare.")
 
     # ---- console table ----
-    hdr = (f"{'pcap':<32}{'C++ pkts':>10}{'Py pkts':>10}{'C++ ms':>10}{'Py ms':>11}"
-           f"{'C++ thru':>12}{'Py thru':>12}{'C++ x':>8}")
+    hdr = (f"{'pcap':<30}{'C++ pkts':>9}{'Py pkts':>9}{'C++ ms':>9}{'Py ms':>10}"
+        f"{'C++ thru':>11}{'Py thru':>11}{'Speedup':>9}{'Match?':>8}")
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
+        match_str = "✅" if r["handshakes_match"] else "❌"
         print(
-            f"{r['pcap']:<32}{r['cpp_packets']:>10}{r['py_packets']:>10}"
-            f"{r['cpp_engine_median_ms']:>10.3f}{r['py_engine_median_ms']:>11.3f}"
-            f"{fmt_pps(r['cpp_pkts_per_sec']):>12}{fmt_pps(r['py_pkts_per_sec']):>12}"
-            f"{r['cpp_speedup_x']:>7.1f}x"
+            f"{r['pcap']:<30}{r['cpp_packets']:>9}{r['py_packets']:>9}"
+            f"{r['cpp_engine_median_ms']:>9.3f}{r['py_engine_median_ms']:>10.3f}"
+            f"{fmt_pps(r['cpp_pkts_per_sec']):>11}{fmt_pps(r['py_pkts_per_sec']):>11}"
+            f"{r['cpp_speedup_x']:>8.1f}x{match_str:>7}"
         )
 
     # ---- csv ----
@@ -113,33 +114,74 @@ def main():
         w.writerows(rows)
     print(f"\nSaved {OUT_CSV}")
 
-    # ---- chart (optional) ----
+    # ---- chart (improved) ----
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        plot_rows = [r for r in rows if r["handshakes_match"]]
-
-        labels = [r["pcap"].replace("benchmark/", "") for r in plot_rows]
+        # Include ALL traces so stress tests are never hidden
+        plot_rows = rows
+        labels = [
+            r["pcap"].replace("benchmark/", "").replace(".pcap", "")
+            for r in plot_rows
+        ]
         cpp_thru = [r["cpp_pkts_per_sec"] for r in plot_rows]
         py_thru = [r["py_pkts_per_sec"] for r in plot_rows]
+        speedups = [r["cpp_speedup_x"] for r in plot_rows]
 
-        x = range(len(labels))
+        x = list(range(len(labels)))
         width = 0.38
-        fig, ax = plt.subplots(figsize=(9, 5))
-        ax.bar([i - width / 2 for i in x], cpp_thru, width, label="C++", color="#2563eb")
-        ax.bar([i + width / 2 for i in x], py_thru, width, label="Python", color="#f59e0b")
-        ax.set_yscale("log")
-        ax.set_ylabel("Throughput (packets/sec, log scale)")
-        ax.set_title("TLS fingerprint engine throughput: C++ vs Python")
-        ax.set_xticks(list(x))
-        ax.set_xticklabels(labels, rotation=20, ha="right")
-        ax.legend()
-        ax.grid(axis="y", which="both", linestyle=":", alpha=0.4)
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
+
+        # Panel 1: Throughput Comparison (Log Scale)
+        ax1.bar([i - width/2 for i in x], cpp_thru, width, label="C++17 (Zero-Copy)", color="#2563eb")
+        ax1.bar([i + width/2 for i in x], py_thru, width, label="Python (Stateful dpkt)", color="#f59e0b")
+        ax1.set_yscale("log")
+        ax1.set_ylabel("Throughput (packets/sec, log scale)")
+        ax1.set_title("Engine Parsing Throughput")
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(labels, rotation=35, ha="right", fontsize=9)
+        ax1.legend(loc="upper left")
+        ax1.grid(axis="y", which="both", linestyle=":", alpha=0.4)
+
+        # Highlight mismatch/loss on cloudflare_x100
+        for i, r in enumerate(plot_rows):
+            if not r["handshakes_match"]:
+                ax1.annotate(
+                    "Lossy Reassembly\n(4KB Cap)",
+                    xy=(i - width/2, cpp_thru[i]),
+                    xytext=(i - 0.5, cpp_thru[i] * 1.8),
+                    arrowprops=dict(arrowstyle="->", color="#dc2626", lw=1.2),
+                    fontsize=8,
+                    fontweight="bold",
+                    color="#dc2626"
+                )
+
+        # Panel 2: Speedup Scaling Factor
+        bars2 = ax2.bar(x, speedups, width=0.5, color="#059669")
+        ax2.set_ylabel("C++ Speedup Factor (x)")
+        ax2.set_title("C++ Speedup Scaling vs. Trace Complexity")
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(labels, rotation=35, ha="right", fontsize=9)
+        ax2.grid(axis="y", linestyle=":", alpha=0.4)
+
+        # Add value labels on top of speedup bars
+        for bar, val in zip(bars2, speedups):
+            ax2.text(
+                bar.get_x() + bar.get_width()/2,
+                bar.get_height() + 0.5,
+                f"{val:.1f}x",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                fontweight="bold"
+            )
+
         fig.tight_layout()
-        fig.savefig(OUT_PNG, dpi=140)
-        print(f"Saved {OUT_PNG}")
+        fig.savefig(OUT_PNG, dpi=160)
+        print(f"Saved enhanced comparison chart to {OUT_PNG}")
     except ImportError:
         print("matplotlib not installed - skipped chart (pip install matplotlib)")
 

@@ -5,6 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
+ansi_clean = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -20,7 +21,7 @@ PCAPS = [
     "custom_client.pcap",
     "chrome.pcap",
     "chrome_run2.pcap",
-    "benchmark/cloudflare_x100.pcap",
+    "stress_test.pcap",
 ]
 
 RUNS = 30
@@ -46,12 +47,14 @@ def run_once(pcap):
 
     wall_ms = (time.perf_counter() - start) * 1000
 
+    clean_output = ansi_clean.sub("", result.stdout)
+
     output = result.stdout
 
-    time_match = time_re.search(output)
-    packets_match = packets_re.search(output)
-    ch_match = ch_re.search(output)
-    sh_match = sh_re.search(output)
+    time_match = time_re.search(clean_output)
+    packets_match = packets_re.search(clean_output)
+    ch_match = ch_re.search(clean_output)
+    sh_match = sh_re.search(clean_output)
 
     if not all([time_match, packets_match, ch_match, sh_match]):
         raise RuntimeError(

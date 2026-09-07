@@ -1,8 +1,8 @@
 pcap,cpp_packets,py_packets,cpp_engine_median_ms,py_engine_median_ms,cpp_pkts_per_sec,py_pkts_per_sec,cpp_speedup_x,cpp_client_hellos,py_client_hellos,cpp_server_hellos,py_server_hellos,handshakes_match
-cloudflare_run1.pcap,2655,1877,1.1661,19.9464,2276898.3,94102.2,17.1,11,11,11,11,True
-curl.pcap,1208,938,0.888,8.1962,1360391.8,114443.5,9.2,1,1,1,1,True
-python_requests.pcap,356,223,0.7047,2.5465,505173.4,87571.2,3.6,1,1,1,1,True
-custom_client.pcap,133,105,0.6744,1.2855,197213.5,81679.0,1.9,1,1,1,1,True
-chrome.pcap,630,353,0.7586,4.4442,830495.3,79430.0,5.9,4,4,4,4,True
-chrome_run2.pcap,591,352,0.7327,4.2564,806642.6,82699.1,5.8,3,3,3,3,True
-benchmark/cloudflare_x100.pcap,265500,187700,67.9467,2264.0801,3907477.4,82903.4,33.3,1100,1100,1100,1001,False
+cloudflare_run1.pcap,2655,1877,142.4875,132.2978,18633.2,14187.7,0.9,11,11,11,11,True
+curl.pcap,1208,938,93.7716,59.08,12882.4,15876.8,0.6,1,1,1,1,True
+python_requests.pcap,356,223,20.8116,17.0342,17105.9,13091.3,0.8,1,1,1,1,True
+custom_client.pcap,133,105,10.0172,7.1402,13277.2,14705.5,0.7,1,1,1,1,True
+chrome.pcap,630,353,37.1906,28.1391,16939.8,12544.8,0.8,4,4,4,4,True
+chrome_run2.pcap,591,352,77.7509,22.4142,7601.2,15704.4,0.3,3,3,3,3,True
+stress_test.pcap,20000,20000,3039.12,1251.3534,6580.9,15982.7,0.4,10000,2,10000,2,False

@@ -38,7 +38,7 @@ PCAPS = [
     "custom_client.pcap",
     "chrome.pcap",
     "chrome_run2.pcap",
-    "benchmark/cloudflare_x100.pcap",
+    "stress_test.pcap",
 ]
 
 RUNS = 30
