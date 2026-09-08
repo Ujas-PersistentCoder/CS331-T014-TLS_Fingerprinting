@@ -17,10 +17,18 @@ The project is developed and tested on Ubuntu 24.04 and Ubuntu under WSL. Redis 
 
 ### Install system dependencies
 
+#### For Linux
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake libpcap-dev libssl-dev redis-server python3-venv
 sudo systemctl enable --now redis-server
+```
+
+#### For MacOS
+```bash
+brew update
+brew install cmake libpcap openssl redis python
+brew services start redis
 ```
 
 ### Redis database setup
@@ -46,6 +54,7 @@ PONG
 
 If Redis is not running, start it with:
 
+#### For Linux
 ```bash
 sudo systemctl start redis-server
 ```
@@ -76,7 +85,7 @@ Use `-a` to interactively label an unknown fingerprint after verifying its sourc
 Live capture requires root or suitable packet-capture capabilities:
 
 ```bash
-sudo ./build/tlsfp_engine -i lo -f "tcp port 443"
+sudo ./build/tlsfp_engine -i en0 -f "tcp port 443"
 ```
 
 ### Run the Python GUI
@@ -109,3 +118,12 @@ python code/db/import_fingerprints.py path/to/approved_catalog.csv
 ```
 
 Existing curated records are preserved. Use `--overwrite` only when the external record has been verified to be more authoritative.
+
+## AI Usage Disclosure
+
+Portions of this project (code scaffolding, debugging assistance, documentation 
+drafting, and test case generation) were developed with the assistance of AI 
+tools (Claude, Gemini, Copilot). All AI-assisted code was reviewed, tested, and validated against 
+known-answer test vectors (Salesforce JA3 reference values, FoxIO JA4 test 
+vectors) by the team before inclusion. The core protocol understanding, 
+architectural decisions, and validation methodology are the team's own work.
