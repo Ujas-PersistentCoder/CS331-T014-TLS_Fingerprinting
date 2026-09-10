@@ -9,7 +9,31 @@ CS 331 Computer Networks
 * D A S K R Manognya 24110097
 
 ## About the project
-TLSFP Engine is a high-performance passive network telemetry tool written in C++17 designed to inspect, reassemble, and fingerprint encrypted traffic without payload decryption. While modern traffic is encrypted under TLS 1.2 and TLS 1.3, the initial cryptographic negotiation in ClientHello and ServerHello packets remains observable in plaintext on the wire. By extracting cipher suites, extensions, elliptic curves, and ALPN parameters, the engine constructs deterministic behavioral signatures for connecting applications. It implements both Salesforce JA3/JA3S and next-generation FoxIO JA4/JA4S specifications, incorporating RFC 8701 GREASE normalization and lexical parameter sorting. The pipeline uses libpcap for zero-copy frame peeling alongside RFC 1982-compliant TCP stream reassembly to handle packet fragmentation and TLS 1.3 middlebox records seamlessly. Extracted hashes are matched against an in-memory Redis database to distinguish tools like cURL, Python requests, Google Chrome, and Mozilla Firefox purely from their handshake. The engine operates across both live interfaces and offline PCAPs, featuring dedicated quiet benchmark (-q) and verbose dissection (-v) modes for performance profiling and deep protocol analysis.
+This project implements passive TLS fingerprinting using the JA3/JA3S (Salesforce) 
+and JA4/JA4S (FoxIO) specifications. It captures TLS ClientHello and ServerHello 
+handshake messages — either offline from PCAP files or live from a network 
+interface — and computes deterministic fingerprints from handshake metadata 
+(cipher suites, extensions, elliptic curves, ALPN, etc.) without needing to 
+decrypt any traffic.
+
+The system ships two independent, parallel implementations:
+
+- **Python engine** (primary submission) — built with `dpkt` for offline pcap 
+  parsing and `scapy` for live capture, with manual `struct.unpack`-based TLS 
+  field extraction. Includes a PyQt6 GUI for interactive analysis and labeling.
+- **C++ engine** (stretch/performance track) — built with `libpcap` and 
+  zero-copy parsing via OpenSSL EVP hashing, achieving significantly higher 
+  throughput on large captures. POSIX-only due to `libpcap`.
+
+Both engines validate against the same curated reference database 
+(`code/db/`), backed by Redis with a JSON fallback, and are cross-checked 
+against official JA3 test vectors and each other's output on shared PCAPs.
+
+The tool demonstrates distinguishing real-world TLS clients — curl, browsers 
+(Chrome, Firefox), Python `requests`, OpenSSL `s_client`, and custom TLS 
+clients — purely from their on-the-wire handshake fingerprint, and documents 
+the security applications (e.g. C2 detection) and known limitations (GREASE, 
+browser extension randomization, spoofability) of this technique.
 
 ## Quick start
 
@@ -17,10 +41,18 @@ The project is developed and tested on Ubuntu 24.04 and Ubuntu under WSL. Redis 
 
 ### Install system dependencies
 
+#### For Linux
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake libpcap-dev libssl-dev redis-server python3-venv
 sudo systemctl enable --now redis-server
+```
+
+#### For MacOS
+```bash
+brew update
+brew install cmake libpcap openssl redis python
+brew services start redis
 ```
 
 ### Redis database setup
@@ -46,6 +78,7 @@ PONG
 
 If Redis is not running, start it with:
 
+#### For Linux
 ```bash
 sudo systemctl start redis-server
 ```
@@ -76,7 +109,7 @@ Use `-a` to interactively label an unknown fingerprint after verifying its sourc
 Live capture requires root or suitable packet-capture capabilities:
 
 ```bash
-sudo ./build/tlsfp_engine -i lo -f "tcp port 443"
+sudo ./build/tlsfp_engine -i en0 -f "tcp port 443"
 ```
 
 ### Run the Python GUI
@@ -109,3 +142,12 @@ python code/db/import_fingerprints.py path/to/approved_catalog.csv
 ```
 
 Existing curated records are preserved. Use `--overwrite` only when the external record has been verified to be more authoritative.
+
+## AI Usage Disclosure
+
+Portions of this project (code scaffolding, debugging assistance, documentation 
+drafting, and test case generation) were developed with the assistance of AI 
+tools (Claude, Gemini, Copilot). All AI-assisted code was reviewed, tested, and validated against 
+known-answer test vectors (Salesforce JA3 reference values, FoxIO JA4 test 
+vectors) by the team before inclusion. The core protocol understanding, 
+architectural decisions, and validation methodology are the team's own work.
