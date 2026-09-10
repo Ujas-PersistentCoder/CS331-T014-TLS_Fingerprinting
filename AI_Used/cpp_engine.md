@@ -119,13 +119,13 @@ Majorly the code is written completely by AI and reviewed by us. However instead
 
 18. Used AI to provide me with the code to beautify the cout printed by the C++ program for better readability.
 
-#####
+#
 
-## AI tools used : Gemini Flash Extended-thinking, (chat only)
+### AI tools used : Gemini Flash Extended-thinking, (chat only)
 
-## Primary prompts given:
+### Primary prompts given:
 
-# Understanding the project
+#### Understanding the project
 
 1. Hey gemini, I have a networks project at hand, and we need to discuss what is the PS, what are we going to do and thoroughly plan it out
 
@@ -146,7 +146,7 @@ Majorly the code is written completely by AI and reviewed by us. However instead
 
 8. can we somehow handle ECH or fingerprint randomisation
 
-# Friction before coding
+#### Friction before coding
 
 1. this is the folder structure we are thinking of using, ofc we can make cahgnes as required. My friend is working on the ingestion of packets/data in c++. And i am in charge of the JA3 and later the JA4 implementation in c++. Lets focus on this. We have three stages right, ingestion,extraction and getting the JA3 string. Lets say he gives me that packet, what will be the format....or maybe we should first go with pcap files
 
@@ -170,7 +170,7 @@ Majorly the code is written completely by AI and reviewed by us. However instead
    What other information can we proide in the GUI or use for ourselves based on just the TLS packets, both client and server, probably showing the encryption strategy etc or naything useful
    How do handle these things like missing segments, or we dont need to worry about them?
 
-# Coding
+#### Coding
 
 1. Umm. my friend is looking after the ingestion part....so we can start with the assumption that hi gives us the tls packet to analyse, ofc in what format i can tell him
 
@@ -212,11 +212,11 @@ Majorly the code is written completely by AI and reviewed by us. However instead
 
 These are the primary prompts used while coding in the project. Later I started a new Gemini chat, got each of the file reviewed one at a time, where it pointed out some critical mistakes, and then also used this chat to debug whenever a issue came up in testing.
 
-## Thought process and AI-Integration
+### Thought process and AI-Integration
 
 Initially used AI (gemini) to get a better understanding of the project, and references to related official documentations. Further used it to verify the pipeline, workflow and work division begin thought of. Following this, used it for coding files part by part, while understanding the code and challenging the decisions made, and improving upon them. Later used it to debug-understand terminal outputs/errors while testing, code review and finally for addressing failures during final testing.
 
-I treated AI (Gemini) as a technical pair programmer:
+Treated AI (Gemini) as a technical pair programmer:
 
 - Navigating Specs: Broke down dense RFCs (TLS 1.3, GREASE, JA4) and checked wire-format nuances before writing code.
 
