@@ -18,6 +18,6 @@ For anything you don't know, LEAVE IT EMPTY. Don't assume anything. Explain the 
 
 ### Thought process and integration:
 
-First asked AI to build up the report in the desired format with context to the entire repo. Then three to four of sat together reviewing each section iteratively and making necessary changes.
+First asked AI to build up the report in the desired format with context to the entire repo. Then 3-4 of us sat together reviewing each section iteratively and making necessary changes.
 
 ### For PPT, only the attached image was generated using gemini, otherwise no AI was explicitly used.
