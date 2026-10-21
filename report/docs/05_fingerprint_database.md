@@ -218,7 +218,7 @@ def enroll(self, hash_str: str, kind: str, name: str, role: str | None = None) -
     self.save()                            # Persist JSON to disk
 ```
 
-### C++: Interactive Prompt (`capture.cpp` lines 38–47)
+### C++: Interactive Prompt (`capture.cpp` lines 58–66)
 
 ```cpp
 std::cout << "[?] Unknown " << kind_name << " fingerprint " << hash

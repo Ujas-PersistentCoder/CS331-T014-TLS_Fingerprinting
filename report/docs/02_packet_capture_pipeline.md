@@ -57,7 +57,7 @@ The first byte of a captured frame depends on the **data link type** of the capt
 The C++ implementation handles 802.1Q VLAN tags by iterating through stacked VLAN headers:
 
 ```cpp
-// capture.cpp lines 158–163
+// capture.cpp lines 196–202
 while ((ethertype == 0x8100 || ethertype == 0x88A8) && 
        pkthdr->caplen >= link_header_len + 4) {
     ethertype = (packet[link_header_len + 2] << 8) | packet[link_header_len + 3];
@@ -108,7 +108,7 @@ EtherType 0x86DD:
 The C++ implementation handles Hop-by-Hop (0) and Routing (43) extension headers:
 
 ```cpp
-// capture.cpp lines 228–232
+// capture.cpp lines 268–272
 while ((next_proto == 0 || next_proto == 43) && pkthdr->caplen >= ext_offset + 8) {
     next_proto = packet[ext_offset];
     ext_offset += (packet[ext_offset + 1] + 1) * 8;
@@ -208,7 +208,7 @@ if flow.pending_handshake:
 
 ### 4.2 C++ Implementation: Inline `StreamBuffer`
 
-**File:** `code/cpp/src/capture.cpp`, function `packet_callback` (lines 136–434)
+**File:** `code/cpp/src/capture.cpp`, function `packet_callback` (lines 175–550)
 
 The C++ approach is simpler: a fixed-size contiguous buffer per flow, with no explicit out-of-order buffering.
 
@@ -230,7 +230,7 @@ struct StreamBuffer {
 The C++ implementation uses **RFC 1982 modular sequence arithmetic** for safe unsigned distance calculation:
 
 ```cpp
-// capture.cpp lines 304–317
+// capture.cpp lines 344–356
 uint32_t diff = seq - buf.next_seq;
 
 if (diff > 0x80000000U) {
@@ -300,12 +300,12 @@ while len(flow.stream) >= 5:
     del flow.stream[:total_record_size]
 ```
 
-### C++: Inline in `packet_callback` (capture.cpp lines 330–356)
+### C++: Inline in `packet_callback` (capture.cpp lines 370–415)
 
 The C++ code performs the same validation inline, with an additional check for TLS 1.3 middlebox compatibility ChangeCipherSpec records:
 
 ```cpp
-// capture.cpp lines 273–284 — Strip TLS 1.3 middlebox CCS
+// capture.cpp lines 313–323 — Strip TLS 1.3 middlebox CCS
 if (payload_len >= 6 && 
     payload[0] == 0x14 && payload[1] == 0x03 && payload[2] == 0x03 &&
     payload[3] == 0x00 && payload[4] == 0x01) {

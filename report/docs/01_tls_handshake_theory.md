@@ -58,7 +58,7 @@ Our capture modules only process records with Content Type `22` (Handshake). Non
 
 ```
 Python (capture.py, line 332):    if content_type != 22: del flow.stream[:total_record_size]; continue
-C++    (capture.cpp, line 338):   (record_type == 0x16) check — non-0x16 flows are never tracked
+C++    (capture.cpp, line 331):   payload[0] != 0x16 check — non-0x16 flows are never tracked
 ```
 
 ---

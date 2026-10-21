@@ -12,7 +12,7 @@
 | **Entry point** | `main.py` — argparse-based CLI with subcommands (`pcap`, `live`) | `main.cpp` — POSIX `getopt`-based CLI with flags (`-r`, `-i`, `-q`, `-v`) |
 | **Processing model** | Generator/iterator (lazy `yield`) | Callback (`pcap_loop` → `packet_callback`) |
 | **GUI** | PyQt6 application (`code/gui/`) | None |
-| **Benchmark mode** | Not available | `-q` quiet mode: suppresses all output, prints throughput summary |
+| **Benchmark mode** | Not in CLI (standalone suite in `code/benchmarks/`) | `-q` quiet mode: suppresses all output, prints throughput summary |
 
 ### Requirement → Design Choice → Reason → Alternative → Trade-off
 

@@ -10,6 +10,7 @@ The GUI provides a visual interface for loading PCAP files, performing live netw
 
 **Entry point:** `code/gui/main.py`  
 **Main window:** `code/gui/window.py` → `TlsMonitorGui`  
+**Analytics window:** `code/gui/analytics.py` → `AnalyticsWindow` (client distribution donut chart)  
 **Worker threads:** `code/gui/workers.py` → `PcapWorker`, `LiveCaptureWorker`
 
 ---
@@ -25,9 +26,11 @@ The GUI provides a visual interface for loading PCAP files, performing live netw
 │  │                                                            │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
 │  │  │  Control Bar (QHBoxLayout)                           │  │ │
-│  │  │  [Load PCAP] [Cancel] [Save PCAP] [Clear Records]   │  │ │
-│  │  │  [Refresh Interfaces] [Interface ▾] [BPF Filter]    │  │ │
+│  │  │  [Load PCAP] [Cancel Load] [Save PCAP]               │  │ │
+│  │  │  [Clear Records] [Refresh Interfaces]                │  │ │
+│  │  │  [Interface: ▾] [BPF Filter: ...]                    │  │ │
 │  │  │  [Start Live Capture] [Label Fingerprint]            │  │ │
+│  │  │  [Analytics]                                         │  │ │
 │  │  └──────────────────────────────────────────────────────┘  │ │
 │  │                                                            │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
@@ -37,10 +40,17 @@ The GUI provides a visual interface for loading PCAP files, performing live netw
 │  │  └──────────────────────────────────────────────────────┘  │ │
 │  │                                                            │ │
 │  │  ┌──────────────────────────────────────────────────────┐  │ │
-│  │  │  QTextEdit (Details Pane — read-only, fixed height)  │  │ │
-│  │  │  Displays selected row metadata + raw JA3 string     │  │ │
+│  │  │  Details Pane (QHBoxLayout)                          │  │ │
+│  │  │  - QTextEdit: row metadata + raw JA3 string          │  │ │
+│  │  │  - QLabel: capture timestamp display                 │  │ │
 │  │  └──────────────────────────────────────────────────────┘  │ │
-│  └────────────────────────────────────────────────────────────┘ │
+│  └──────────────────────────┬─────────────────────────────────┘ │
+│                             │ opens / updates                   │
+│                             ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  AnalyticsWindow (QWidget)                                │  │
+│  │  FigureCanvasQTAgg (matplotlib donut chart of matches)    │  │
+│  └───────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │  ┌─────────────────────────┐  ┌────────────────────────────────┐│
 │  │  PcapWorker (QThread)   │  │  LiveCaptureWorker (QThread)   ││
@@ -48,6 +58,7 @@ The GUI provides a visual interface for loading PCAP files, performing live netw
 │  │  ├─ FingerprintDB       │  │  ├─ TCPReassembler             ││
 │  │  └─ rowExtracted signal │  │  ├─ FingerprintDB              ││
 │  │                         │  │  └─ rowExtracted signal        ││
+│  │                         │  │  └─ packetBuffer (for Save)    ││
 │  └─────────────────────────┘  └────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -136,19 +147,27 @@ PcapWorker.rowExtracted(dict)  ──signal──►  TlsMonitorGui.appendTableR
                                           Insert row into QTableWidget
                                           Update rowCache list
                                           Auto-scroll to bottom
+                                          Refresh AnalyticsWindow if open
+
+TlsMonitorGui.analyticsButton.clicked  ──signal──►  openAnalytics()
+                                                      │
+                                                      ▼
+                                            Refresh and show AnalyticsWindow
 
 TlsMonitorGui.itemSelectionChanged  ──signal──►  displayRowDetails()
                                                     │
                                                     ▼
                                           Show metadata in QTextEdit
+                                          Update timestampLabel
                                           Enable/disable Label button
 
 TlsMonitorGui.labelButton.clicked  ──signal──►  labelSelectedFingerprint()
                                                     │
                                                     ▼
                                           QInputDialog for name
-                                          db.enroll() to Redis + JSON
-                                          Update table cell
+                                          db.enroll() unknown JA3 & JA4
+                                          Update table cells (cols 6 & 7)
+                                          Refresh AnalyticsWindow if open
 ```
 
 ---
@@ -170,6 +189,7 @@ Each row emitted by workers is a Python dictionary:
     "fingerprintKind": "ja3" | "ja3s" | "ja4" | "ja4s",
     "fingerprintHash": "<the hash to enroll if labeling>",
     "ja3Raw": "771,4865-4866-4867,0-10-11,23-24-25,0",
+    "captureTime": "2026-10-12 10:15:20.123",
 }
 ```
 
@@ -186,9 +206,9 @@ Each row emitted by workers is a Python dictionary:
 2. The "Label Fingerprint" button becomes enabled
 3. Analyst clicks the button → `QInputDialog` prompts for a verified client/server name
 4. On confirmation:
-   - `FingerprintDB.enroll()` persists the label to Redis and JSON
-   - The table cell is updated with the new label
-   - The details pane refreshes
+   - `FingerprintDB.enroll()` persists the label to Redis and JSON for any unknown hashes in the row (both JA3 and JA4)
+   - Table cells for both JA3 Match (col 6) and JA4 Match (col 7) are updated with the new label
+   - The details pane refreshes and `AnalyticsWindow` updates its distribution charts if visible
 
 ### Requirement → Design Choice → Reason → Alternative → Trade-off
 
@@ -262,13 +282,14 @@ def closeEvent(self, event):
 ```
 code/gui/main.py
   ├─ code/gui/window.py  (TlsMonitorGui)
+  │    ├─ code/gui/analytics.py  (AnalyticsWindow - matplotlib donut chart)
   │    ├─ code/gui/workers.py  (PcapWorker, LiveCaptureWorker)
   │    │    ├─ code/python/src/capture.py  (read_pcap, TCPReassembler)
   │    │    ├─ code/python/src/ja3.py      (compute_ja3_hash, etc.)
   │    │    ├─ code/python/src/ja4.py      (compute_ja4_string, etc.)
   │    │    └─ code/python/src/db.py       (FingerprintDB)
   │    └─ code/python/src/db.py           (FingerprintDB — for enrollment)
-  └─ PyQt6, scapy
+  └─ PyQt6, matplotlib, scapy
 ```
 
 The GUI adds `sys.path.insert(0, str(pythonEngineDir))` to import from the Python engine directory without requiring package installation.

@@ -11,10 +11,10 @@
 | Python | pytest | `tests/test_parser.py` (9 tests) | 9 |
 | Python | pytest | `tests/test_fingerprints.py` (6 tests) | 6 |
 | Python | pytest | `tests/test_ja4.py` (11 tests) | 11 |
-| Python | pytest | `tests/test_capture.py` (16 tests across 8 classes) | 16 |
+| Python | pytest | `tests/test_capture.py` (17 tests across 10 classes) | 17 |
 | Python | pytest | `tests/test_integration.py` (2 tests) | 2 |
-| C++ | GoogleTest 1.12.1 | `tests/test_fingerprints.cpp` (~55 tests) | ~55 |
-| **Total** | | | **~99** |
+| C++ | GoogleTest 1.12.1 | `tests/test_fingerprints.cpp` (51 tests) | 51 |
+| **Total** | | | **96** |
 
 ---
 
@@ -27,7 +27,7 @@ Tests the byte-level TLS record and handshake parsing logic.
 | Test | What It Verifies |
 |------|-----------------|
 | `test_parse_tls_record` | Correct extraction of content type, version, length from a 5-byte TLS record header |
-| `test_parse_tls_record_truncated` | Returns `None` for truncated input (< 5 bytes) |
+| `test_parse_tls_record_truncated` | Raises `ValueError` ("Truncated TLS record fragment") for incomplete record payload |
 | `test_parse_handshake_header` | Correct extraction of message type and 3-byte length from a handshake header |
 | `test_parse_minimal_client_hello` | Parses a minimal ClientHello (version, session ID, ciphers, compression) without extensions |
 | `test_parse_client_hello_with_extensions` | Parses a ClientHello with SNI, Supported Groups, and EC Point Formats extensions |
@@ -75,7 +75,7 @@ Tests the byte-level TLS record and handshake parsing logic.
 
 ### 2.4 TCP Reassembly Tests — `test_capture.py`
 
-Organized into 8 test classes covering the full `TCPReassembler` functionality.
+Organized into 10 test classes covering the full `TCPReassembler` functionality (17 tests total).
 
 #### `TestBasicParsing` (3 tests)
 
@@ -222,7 +222,7 @@ Organized into 8 test classes covering the full `TCPReassembler` functionality.
 | `DifferentInputsProduceDifferentHashes` | MD5("abc") ≠ MD5("abd") | — |
 | `Produces32LowercaseHexCharacters` | Output is exactly 32 chars, all lowercase hex | — |
 
-### 3.7 JA3 Tests (16 tests)
+### 3.7 JA3 Tests (13 tests)
 
 | Test | What It Verifies |
 |------|-----------------|

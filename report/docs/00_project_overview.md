@@ -118,7 +118,7 @@ The system is implemented as a dual-track project: a **Python engine** for rapid
 | JA4/JA4S hashing | `hashlib.sha256` (stdlib) | `code/python/src/ja4.py` |
 | Database (primary) | `redis-py` | `code/python/src/db.py` |
 | Database (fallback) | JSON file | `code/python/src/db.py` |
-| GUI | PyQt6 | `code/gui/` |
+| GUI | PyQt6, matplotlib | `code/gui/` |
 | Testing | pytest | `code/python/tests/` |
 
 ### 3.2 C++ Track
@@ -163,6 +163,7 @@ TLS-Fingerprinting/
 │   │   │   ├── ja3.py                 # JA3/JA3S computation
 │   │   │   ├── ja4.py                 # JA4/JA4S computation
 │   │   │   ├── capture.py             # TCPReassembler + pcap reader + live capture
+│   │   │   ├── tcp_stream.py          # TCPStream buffer management helper
 │   │   │   └── db.py                  # FingerprintDB (Redis + JSON)
 │   │   └── tests/
 │   │       ├── test_parser.py         # Byte-level parser tests
@@ -190,7 +191,14 @@ TLS-Fingerprinting/
 │   ├── gui/                           # PyQt6 GUI application
 │   │   ├── main.py                    # GUI entrypoint
 │   │   ├── window.py                  # Main window (TlsMonitorGui)
-│   │   └── workers.py                 # QThread workers for PCAP + live capture
+│   │   ├── workers.py                 # QThread workers for PCAP + live capture
+│   │   └── analytics.py               # Analytics window (client distribution donut chart)
+│   ├── benchmarks/                    # Cross-engine throughput benchmark suite
+│   │   ├── benchmark_cpp.py           # C++ throughput benchmark driver
+│   │   ├── benchmark_python.py        # Python throughput benchmark driver
+│   │   ├── benchmark_compare.py       # Comparative analysis and charting
+│   │   ├── _py_bench_worker.py        # Subprocess worker for Python benchmark
+│   │   └── results/                   # Benchmark CSV results and comparison plot
 │   ├── db/                            # Shared fingerprint database files
 │   │   ├── seed_fingerprints.json     # Curated JA3/JA3S/JA4/JA4S catalog
 │   │   ├── capture_manifest.json      # Metadata for captured client profiles
