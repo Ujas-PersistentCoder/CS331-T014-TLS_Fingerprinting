@@ -96,14 +96,22 @@ int main(int argc, char *argv[]) {
 
     const auto &stats = engine.stats();
     if (!options.quiet) {
-        std::cout << "\n\033[1;32m=== Processing Summary ===\033[0m\n"
-                  << "Total Packets:   " << stats.total_packets << "\n"
-                  << "ClientHellos:    " << stats.client_hellos << "\n"
-                  << "ServerHellos:    " << stats.server_hellos << "\n"
-                  << "Elapsed Time:    " << std::fixed << std::setprecision(4) 
-                  << stats.elapsed_seconds() << "s\n"
-                  << "Throughput:      " << std::fixed << std::setprecision(1) 
-                  << stats.packets_per_second() << " packets/s\n";
+        bool is_live = !options.interface_name.empty();
+        std::cout << "\n\033[1;32m=== " << (is_live ? "Live Capture Summary" : "Processing Summary") << " ===\033[0m\n"
+                  << "Total Packets:    " << stats.total_packets << "\n"
+                  << "ClientHellos:     " << stats.client_hellos << "\n"
+                  << "ServerHellos:     " << stats.server_hellos << "\n"
+                  << (is_live ? "Capture Duration: " : "Elapsed Time:     ") 
+                  << std::fixed << std::setprecision(is_live ? 2 : 4) 
+                  << stats.elapsed_seconds() << "s\n";
+
+        if (!is_live) {
+            std::cout << "Throughput:       " << std::fixed << std::setprecision(1) 
+                      << stats.packets_per_second() << " packets/s\n";
+        } else if (stats.elapsed_seconds() > 0.05) {
+            std::cout << "TLS Traffic Rate:     " << std::fixed << std::setprecision(1) 
+                      << stats.packets_per_second() << " packets/s\n";
+        }
     } else {
         // Output for automated benchmarking: <client_hellos> <server_hellos> <elapsed_ms> <kpps>
         std::cout << stats.client_hellos << " "
