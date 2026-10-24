@@ -91,18 +91,20 @@ void parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
             case 0x0010: {
                 uint16_t list_len = 0;
                 if (reader.read_u16_be(list_len)) {
-                    while (reader.has_bytes(1)) {
-                        uint8_t proto_len = 0;
-                        if (!reader.read_u8(proto_len) || proto_len == 0 || !reader.has_bytes(proto_len)) {
-                            break;
-                        }
-                        std::string_view cand;
-                        reader.read_string_view(proto_len, cand);
+                    auto alpn_sub = reader.spawn_sub_reader(list_len);
+                    if (alpn_sub) {
+                        while (alpn_sub->has_bytes(1)) {
+                            uint8_t proto_len = 0;
+                            if (!alpn_sub->read_u8(proto_len) || proto_len == 0 || !alpn_sub->has_bytes(proto_len)) {
+                                break;
+                            }
+                            std::string_view cand;
+                            alpn_sub->read_string_view(proto_len, cand);
 
-                        // Prune GREASE ALPN values to prevent JA4 drift
-                        if (!is_alpn_grease(cand)) {
-                            out.first_alpn = cand;
-                            break; // Spec: only capture first negotiated/offered protocol
+                            if (!is_alpn_grease(cand)) {
+                                out.first_alpn = cand;
+                                break; // Spec: only capture first non-GREASE protocol
+                            }
                         }
                     }
                 }
@@ -160,10 +162,13 @@ void parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
             // Extension 0x0010: Negotiated ALPN
             case 0x0010: {
                 uint16_t list_len = 0;
-                if (reader.read_u16_be(list_len) && reader.has_bytes(1)) {
-                    uint8_t proto_len = 0;
-                    if (reader.read_u8(proto_len) && reader.has_bytes(proto_len)) {
-                        reader.read_string_view(proto_len, out.first_alpn);
+                if (reader.read_u16_be(list_len)) {
+                    auto alpn_sub = reader.spawn_sub_reader(list_len);
+                    if (alpn_sub && alpn_sub->has_bytes(1)) {
+                        uint8_t proto_len = 0;
+                        if (alpn_sub->read_u8(proto_len) && alpn_sub->has_bytes(proto_len)) {
+                            alpn_sub->read_string_view(proto_len, out.first_alpn);
+                        }
                     }
                 }
                 break;
@@ -179,17 +184,22 @@ void parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
 
 bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloData &out) {
     out.clear();
-    ByteReader reader{record, record_len};
+    ByteReader root_reader{record, record_len};
 
     // 1. Record Header (5 bytes)
     uint8_t rec_type = 0;
     uint16_t rec_ver = 0;
     uint16_t rec_len = 0;
-    if (!reader.read_u8(rec_type) || rec_type != TLS_RECORD_HANDSHAKE ||
-        !reader.read_u16_be(rec_ver) || !reader.read_u16_be(rec_len) ||
-        !reader.has_bytes(rec_len)) {
+    if (!root_reader.read_u8(rec_type) || rec_type != TLS_RECORD_HANDSHAKE ||
+        !root_reader.read_u16_be(rec_ver) || !root_reader.read_u16_be(rec_len) ||
+        !root_reader.has_bytes(rec_len)) {
         return false;
     }
+
+    // Isolate reader strictly to declared record length to enforce boundary
+    auto rec_sub_opt = root_reader.spawn_sub_reader(rec_len);
+    if (!rec_sub_opt) return false;
+    ByteReader &reader = *rec_sub_opt;
 
     // 2. Handshake Header (4 bytes)
     uint8_t hs_type = 0;
@@ -237,7 +247,7 @@ bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloDat
         return false;
     }
 
-    // 8. Extensions Vector (optional in legacy SSL, standard in modern TLS)
+    // 8. Extensions Vector
     if (hs_reader.has_bytes(2)) {
         uint16_t exts_len = 0;
         if (!hs_reader.read_u16_be(exts_len) || !hs_reader.has_bytes(exts_len)) {
@@ -255,17 +265,21 @@ bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloDat
 
 bool parse_server_hello(const uint8_t *record, size_t record_len, ServerHelloData &out) {
     out.clear();
-    ByteReader reader{record, record_len};
+    ByteReader root_reader{record, record_len};
 
     // 1. Record Header (5 bytes)
     uint8_t rec_type = 0;
     uint16_t rec_ver = 0;
     uint16_t rec_len = 0;
-    if (!reader.read_u8(rec_type) || rec_type != TLS_RECORD_HANDSHAKE ||
-        !reader.read_u16_be(rec_ver) || !reader.read_u16_be(rec_len) ||
-        !reader.has_bytes(rec_len)) {
+    if (!root_reader.read_u8(rec_type) || rec_type != TLS_RECORD_HANDSHAKE ||
+        !root_reader.read_u16_be(rec_ver) || !root_reader.read_u16_be(rec_len) ||
+        !root_reader.has_bytes(rec_len)) {
         return false;
     }
+
+    auto rec_sub_opt = root_reader.spawn_sub_reader(rec_len);
+    if (!rec_sub_opt) return false;
+    ByteReader &reader = *rec_sub_opt;
 
     // 2. Handshake Header (4 bytes)
     uint8_t hs_type = 0;
@@ -291,7 +305,7 @@ bool parse_server_hello(const uint8_t *record, size_t record_len, ServerHelloDat
         return false;
     }
 
-    // 6. Selected Cipher Suite (single 2-byte value)
+    // 6. Selected Cipher Suite
     if (!hs_reader.read_u16_be(out.selected_cipher)) return false;
 
     // 7. Compression Method
@@ -311,6 +325,7 @@ bool parse_server_hello(const uint8_t *record, size_t record_len, ServerHelloDat
         }
     }
 
+    // Fall back to server_version if supported_versions (0x002b) is absent (TLS 1.2)
     if (out.selected_version == 0) {
         out.selected_version = out.server_version;
     }

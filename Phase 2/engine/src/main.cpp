@@ -1,16 +1,21 @@
 #include "tlsfp/capture.hpp"
 #include <iostream>
 #include <csignal>
+#include <atomic>
 #include <unistd.h>
 #include <iomanip>
 
 namespace {
-tlsfp::CaptureEngine *g_engine = nullptr;
 
-void signal_handler(int) {
-    if (g_engine) {
-        g_engine->stop();
+std::atomic<tlsfp::CaptureEngine*> g_engine{nullptr};
+
+void signal_handler(int sig) {
+    auto *engine = g_engine.load(std::memory_order_relaxed);
+    if (engine) {
+        engine->stop();
     }
+    // Restore default handler so a second interrupt immediately terminates
+    std::signal(sig, SIG_DFL);
 }
 
 void print_usage(const char *prog) {
@@ -66,7 +71,7 @@ int main(int argc, char *argv[]) {
     }
 
     tlsfp::CaptureEngine engine(options);
-    g_engine = &engine;
+    g_engine.store(&engine, std::memory_order_relaxed);
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -83,7 +88,11 @@ int main(int argc, char *argv[]) {
     }
 
     bool success = engine.run();
-    g_engine = nullptr;
+    g_engine.store(nullptr, std::memory_order_relaxed);
+
+    if (!success) {
+        return 1; // Exit cleanly if pcap initialization failed
+    }
 
     const auto &stats = engine.stats();
     if (!options.quiet) {
@@ -96,12 +105,12 @@ int main(int argc, char *argv[]) {
                   << "Throughput:      " << std::fixed << std::setprecision(1) 
                   << stats.packets_per_second() << " packets/s\n";
     } else {
-        // Benchmark quiet output
+        // Output for automated benchmarking: <client_hellos> <server_hellos> <elapsed_ms> <kpps>
         std::cout << stats.client_hellos << " "
                   << stats.server_hellos << " "
                   << std::fixed << std::setprecision(3) << (stats.elapsed_seconds() * 1000.0) << " ms "
                   << std::fixed << std::setprecision(1) << (stats.packets_per_second() / 1000.0) << " k/s\n";
     }
 
-    return success ? 0 : 1;
+    return 0;
 }

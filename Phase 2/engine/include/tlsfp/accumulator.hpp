@@ -17,7 +17,7 @@ namespace tlsfp {
 struct FragmentedHandshake {
     std::array<uint8_t, ACCUMULATOR_BUFFER_SIZE> buffer;
     size_t total_expected{0};
-    size_t high_water_mark{0};
+    size_t bytes_accumulated{0};
     uint32_t base_seq{0};
     time_t last_seen{0};
 };

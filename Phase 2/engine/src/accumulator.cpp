@@ -22,31 +22,36 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
     if (!active_flows_.empty()) {
         auto it = active_flows_.find(key);
         if (it != active_flows_.end()) {
-            // --- SLOW PATH: Existing Fragmented Flow ---
+            // --- TIER 2: Existing Fragmented Flow ---
             FragmentedHandshake &flow = it->second;
             flow.last_seen = current_time;
 
-            // Relative sequence offset placement (handles in-order & out-of-order)
-            uint32_t offset = seq - flow.base_seq;
+            // RFC 1982 sequence distance from base_seq
+            int32_t seq_diff = static_cast<int32_t>(seq - flow.base_seq);
 
-            // Modular sequence sanity check within expected record size
-            if (offset < flow.total_expected && offset < ACCUMULATOR_BUFFER_SIZE) {
-                size_t max_allowed = std::min(flow.total_expected - offset, ACCUMULATOR_BUFFER_SIZE - offset);
-                size_t bytes_to_copy = std::min(payload_len, max_allowed);
-                std::memcpy(flow.buffer.data() + offset, payload, bytes_to_copy);
+            // If segment is before our current accumulation point, it's a duplicate/retransmit; ignore safely
+            if (seq_diff < 0 || static_cast<size_t>(seq_diff) < flow.bytes_accumulated) {
+                return;
+            }
 
-                size_t segment_end = offset + bytes_to_copy;
-                if (segment_end > flow.high_water_mark) {
-                    flow.high_water_mark = segment_end;
+            // If segment is beyond our current accumulation point, a gap occurred; drop flow
+            if (static_cast<size_t>(seq_diff) > flow.bytes_accumulated) {
+                active_flows_.erase(it);
+                return;
+            }
+
+            size_t bytes_needed = flow.total_expected - flow.bytes_accumulated;
+            size_t bytes_to_copy = std::min(payload_len, bytes_needed);
+
+            std::memcpy(flow.buffer.data() + flow.bytes_accumulated, payload, bytes_to_copy);
+            flow.bytes_accumulated += bytes_to_copy;
+
+            // Check if full TLS record has been assembled
+            if (flow.bytes_accumulated >= flow.total_expected) {
+                if (on_handshake_ready_) {
+                    on_handshake_ready_(key, flow.buffer.data(), flow.total_expected);
                 }
-
-                // Check if full TLS record has accumulated
-                if (flow.high_water_mark >= flow.total_expected) {
-                    if (on_handshake_ready_) {
-                        on_handshake_ready_(key, flow.buffer.data(), flow.total_expected);
-                    }
-                    active_flows_.erase(it);
-                }
+                active_flows_.erase(it);
             }
             return;
         }
@@ -95,8 +100,8 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
     FragmentedHandshake &flow = active_flows_[key];
     flow.total_expected   = total_record_len;
     flow.base_seq         = seq;
-    flow.last_seen        = current_time;
-    flow.high_water_mark  = payload_len;
+    flow.last_seen         = current_time;
+    flow.bytes_accumulated = payload_len;
 
     std::memcpy(flow.buffer.data(), payload, payload_len);
 }

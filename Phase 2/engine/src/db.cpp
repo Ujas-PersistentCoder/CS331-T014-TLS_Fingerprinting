@@ -11,6 +11,7 @@
 #include <limits>
 #include <utility>
 #include <cstring>
+#include <charconv>
 
 namespace tlsfp {
 
@@ -273,10 +274,23 @@ bool write_all(int fd, const char *data, std::size_t length) {
     while (total < length) {
         ssize_t written = ::send(fd, data + total, length - total, 0);
         if (written <= 0) {
-            if (written < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+            if (written < 0 && errno == EINTR) continue;
             return false;
         }
         total += static_cast<std::size_t>(written);
+    }
+    return true;
+}
+
+bool read_exact(int fd, char *buffer, std::size_t length) {
+    std::size_t total = 0;
+    while (total < length) {
+        ssize_t bytes_read = ::recv(fd, buffer + total, length - total, 0);
+        if (bytes_read <= 0) {
+            if (bytes_read < 0 && errno == EINTR) continue;
+            return false;
+        }
+        total += static_cast<std::size_t>(bytes_read);
     }
     return true;
 }
@@ -287,22 +301,29 @@ bool read_line(int fd, std::string &line) {
     while (true) {
         ssize_t bytes_read = ::recv(fd, &ch, 1, 0);
         if (bytes_read <= 0) {
-            if (bytes_read < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+            if (bytes_read < 0 && errno == EINTR) continue;
             return false;
         }
         if (ch == '\r') {
             char next = 0;
-            bytes_read = ::recv(fd, &next, 1, 0);
-            return bytes_read == 1 && next == '\n';
+            if (!read_exact(fd, &next, 1) || next != '\n') {
+                return false;
+            }
+            return true;
         }
         line.push_back(ch);
     }
 }
 
+bool parse_resp_integer(const std::string &str, long &val) {
+    if (str.empty()) return false;
+    auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), val);
+    return ec == std::errc{} && ptr == (str.data() + str.size());
+}
+
 bool read_redis_value(int fd, FingerprintDatabase::RedisValue &value) {
     char type = 0;
-    ssize_t bytes_read = ::recv(fd, &type, 1, 0);
-    if (bytes_read <= 0) return false;
+    if (!read_exact(fd, &type, 1)) return false;
     value.type = type;
     value.text.clear();
     value.items.clear();
@@ -313,23 +334,26 @@ bool read_redis_value(int fd, FingerprintDatabase::RedisValue &value) {
     if (type == '$') {
         std::string len_str;
         if (!read_line(fd, len_str)) return false;
-        long length = std::stol(len_str);
+        long length = 0;
+        if (!parse_resp_integer(len_str, length)) return false;
         if (length == -1) return true; // Null bulk string
+        if (length < 0) return false;
+
         value.text.resize(static_cast<std::size_t>(length));
-        std::size_t total = 0;
-        while (total < static_cast<std::size_t>(length)) {
-            ssize_t chunk = ::recv(fd, &value.text[total], static_cast<std::size_t>(length) - total, 0);
-            if (chunk <= 0) return false;
-            total += static_cast<std::size_t>(chunk);
+        if (!read_exact(fd, value.text.data(), static_cast<std::size_t>(length))) {
+            return false;
         }
         char crlf[2];
-        return ::recv(fd, crlf, 2, 0) == 2 && crlf[0] == '\r' && crlf[1] == '\n';
+        return read_exact(fd, crlf, 2) && crlf[0] == '\r' && crlf[1] == '\n';
     }
     if (type == '*') {
         std::string count_str;
         if (!read_line(fd, count_str)) return false;
-        long count = std::stol(count_str);
+        long count = 0;
+        if (!parse_resp_integer(count_str, count)) return false;
         if (count == -1) return true;
+        if (count < 0) return false;
+
         value.items.resize(static_cast<std::size_t>(count));
         for (std::size_t i = 0; i < static_cast<std::size_t>(count); ++i) {
             if (!read_redis_value(fd, value.items[i])) return false;
@@ -400,7 +424,11 @@ bool FingerprintDatabase::connect() {
     ::freeaddrinfo(result);
 
     if (socket_ < 0) return false;
-    return select_database();
+    if (!select_database()) {
+        disconnect();
+        return false;
+    }
+    return true;
 }
 
 void FingerprintDatabase::disconnect() noexcept {
@@ -425,7 +453,7 @@ bool FingerprintDatabase::store(const FingerprintRecord &record) {
     cache_[key] = record;
     missing_cache_.erase(key);
 
-    if (!is_connected()) return true; // Stored in in-memory cache
+    if (!is_connected()) return true; // Stored in local memory cache
 
     std::vector<std::string> args = {"HSET", key,
         "hash", record.hash,

@@ -50,15 +50,19 @@ struct FlowKey {
 // High-distribution hash functor for FlowKey (Fibonacci multiplicative hashing for IPv4)
 struct FlowHash {
     std::size_t operator()(const FlowKey &k) const noexcept {
+        constexpr uint64_t PRIME = 0x9e3779b97f4a7c15ULL;
         std::size_t h = k.ip_version ^ (static_cast<std::size_t>(k.src_port) << 16) ^ k.dst_port;
         if (k.ip_version == 4) {
             h ^= static_cast<std::size_t>(k.src_ip.v4.s_addr) ^ 
-                 (static_cast<std::size_t>(k.dst_ip.v4.s_addr) * 0x9e3779b97f4a7c15ULL);
+                 (static_cast<std::size_t>(k.dst_ip.v4.s_addr) * PRIME);
         } else {
-            uint32_t p1[4], p2[4];
-            std::memcpy(p1, &k.src_ip.v6, sizeof(p1));
-            std::memcpy(p2, &k.dst_ip.v6, sizeof(p2));
-            h ^= p1[0] ^ p1[1] ^ p1[2] ^ p1[3] ^ p2[0] ^ p2[1] ^ p2[2] ^ p2[3];
+            uint64_t words[4];
+            std::memcpy(words, &k.src_ip.v6, 16);
+            std::memcpy(words + 2, &k.dst_ip.v6, 16);
+            for (int i = 0; i < 4; ++i) {
+                h ^= static_cast<std::size_t>(words[i] * PRIME);
+                h = (h << 13) | (h >> (sizeof(std::size_t) * 8 - 13));
+            }
         }
         return h;
     }

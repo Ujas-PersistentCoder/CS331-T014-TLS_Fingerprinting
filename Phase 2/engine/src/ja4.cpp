@@ -183,7 +183,9 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
         append_hex4_joined(fp.raw_ja4_c, filtered_exts, ',');
 
         if (!client.signature_algorithms.empty()) {
-            fp.raw_ja4_c.push_back('_');
+            if (!filtered_exts.empty()) {
+                fp.raw_ja4_c.push_back('_');
+            }
             // Signature algorithms MUST maintain original wire order per JA4 specification
             append_hex4_joined(fp.raw_ja4_c, client.signature_algorithms, ',');
         }

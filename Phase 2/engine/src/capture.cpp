@@ -268,6 +268,13 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
                 if (pkthdr->caplen < 18) return;
                 link_hdr_len = 18;
                 ethertype = (static_cast<uint16_t>(packet[16]) << 8) | packet[17];
+                // Loop over stacked VLAN tags (0x8100 = 802.1Q, 0x88A8 = 802.1ad QinQ)
+                while ((ethertype == 0x8100 || ethertype == 0x88A8) && 
+                       pkthdr->caplen >= link_hdr_len + 4) {
+                    ethertype = (static_cast<uint16_t>(packet[link_hdr_len + 2]) << 8) | 
+                                packet[link_hdr_len + 3];
+                    link_hdr_len += 4;
+                }
             }
             break;
         }
@@ -323,7 +330,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 
         uint8_t next_proto = ip6_ptr[6];
         size_t ext_offset = link_hdr_len + 40;
-        while ((next_proto == 0 || next_proto == 43) && pkthdr->caplen >= ext_offset + 8) {
+        while ((next_proto == 0 || next_proto == 43 || next_proto == 60) && pkthdr->caplen >= ext_offset + 8) {
             next_proto = packet[ext_offset];
             ext_offset += static_cast<size_t>(packet[ext_offset + 1] + 1) * 8;
         }
@@ -377,7 +384,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 void CaptureEngine::process_assembled_handshake(const FlowKey &key, 
                                                 const uint8_t *record_data, 
                                                 size_t record_len) {
-    if (record_len < 6) return;
+    if (record_len < 9 || record_data[0] != TLS_RECORD_HANDSHAKE) return;
 
     uint8_t hs_type = record_data[5]; // Byte 0..4 = Record Header, Byte 5 = Handshake Type
 
