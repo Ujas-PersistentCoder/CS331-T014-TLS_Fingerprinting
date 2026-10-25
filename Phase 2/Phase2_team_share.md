@@ -52,6 +52,16 @@
 ### Milestone 1: Core Engine Revamp (Prerequisite Foundation)
 *Must be merged into `main` before feature branches begin coding in C++.*
 * Strip out old sequence tracking, retransmission handling, and out-of-order buffers.
+
+> **Confusion regarding the need for TCP Reassembly**. Here is the supporting theory:
+> - An application using a TCP socket receives an ordered byte stream. It does not ordinarily need to reassemble TCP segments, remove retransmissions, or reorder out-of-order data itself.
+> - A passive packet analyzer reading captured packets sees individual packets. If it wants to reconstruct the same byte stream, it may need to account for TCP segmentation, retransmissions, ordering, and missing data—or use a library that does so.  
+>
+> Our TLS fingerprinting project sits at the intersection of these two perspectives. Whether reassembly is needed depends on *where* the tool obtains its input.
+> - TCP stream reassembly is needed if our packet parser must reconstruct a stream from individual segments and the relevant bytes do not arrive together.
+> - Similarly, need for custom dedup logic also depends. The TCP stack removes duplicate data for a socket consumer; but a packet observer may see retransmissions.
+> - TLS record framing and TLS handshake parsing are still required as it's L7 (application layer) level.
+
 * Implement a **Two-Tier Stream Handler**:
   * **Fast Path (Single Packet):** If TLS Handshake Length $\le$ TCP Payload, parse directly from zero-copy `libpcap` buffer. (Applies to >95% of classic handshakes).
   * **Slow Path (Segment Accumulator):** If Handshake Length $>$ TCP Payload, append contiguous segments into a bounded **8192-byte (8 KB)** scratchpad, parse, and reset. *(Rationale: Modern Post-Quantum ClientHellos with ML-KEM-768/Kyber keys, certificate compression, and hybrid extension suites reach 2.5 KB – 3.5 KB. Bumping the scratchpad from 4 KB to 8 KB provides safe headroom with negligible memory overhead, ensuring large PQ-TLS handshakes are never truncated).*
@@ -62,8 +72,9 @@
 ### Track A: JA4T & Cross-Layer Impersonation Detection
 *Focus: Catching tools that spoof browser TLS handshakes.*
 
-* **The Problem:** `curl-impersonate` on Linux sends Chrome's exact TLS extension order. JA3/JA4 alone cannot detect this spoof.
-* **The Solution:** The user controls the TLS handshake (L7), but the OS kernel controls TCP options (L4).
+* **The Problem:** `curl-impersonate` on Linux sends Chrome's exact TLS extension order. In general, **L7 (TLS/Application layer) can be easily modified/spoofed**. JA3/JA4 alone cannot detect this spoof.
+* **The Solution:** The user controls the TLS handshake (L7), but the OS kernel controls TCP options (L4).  
+> **Why L4 Identifies the OS**: The kernel dictates default values for the Initial Window Size, TTL (Time to Live), Window Scaling, and the specific order of TCP Options (like SACK or Timestamps).  
 * **Tasks:**
   1. Parse the TCP SYN packet in C++: extract TCP Initial Window, Window Scale, and ordered TCP options (`mss-ws-sack-ts`) to compute the **JA4T** fingerprint.
   2. Extract and normalize IP TTL (Linux defaults to 64; Windows defaults to 128).
@@ -151,4 +162,4 @@
 | **Network Offloads** | Ignored (treated socket data as wire data). | Evaluated empirically using an `ethtool` GRO/TSO matrix. |
 | **Attacker Model** | None (assumed benign traffic). | Adversarial (detecting spoofed TLS stacks using `curl-impersonate` via JA4T TCP/IP stack signatures). |
 | **Protocol Scope** | Classic TLS 1.2 / 1.3 (single-packet assumption). | Next-generation TLS: Post-Quantum TLS (multi-packet fragmentation) + ECH (privacy vs. visibility). |
-| **Language Dualism** | "C++ is faster than Python" microbenchmark. | C++ as wire-speed monitor; Python as adversarial experimentation harness. |
+| **Language Dualism** | "C++ is faster than Python" microbenchmark. | C++ as wire-speed monitor; Python as adversarial experimentation harness. |
