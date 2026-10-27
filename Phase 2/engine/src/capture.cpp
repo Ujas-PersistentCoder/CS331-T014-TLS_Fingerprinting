@@ -426,7 +426,9 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             if (options_.verbose) {
                 print_verbose_client(impl_->client_scratchpad);
             }
-            std::cout << std::flush;
+            if (!options_.interface_name.empty()) {
+                std::cout << std::flush;
+            }
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         stats_.server_hellos++;
@@ -466,7 +468,9 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             if (options_.verbose) {
                 print_verbose_server(impl_->server_scratchpad);
             }
-            std::cout << std::flush;
+            if (!options_.interface_name.empty()) {
+                std::cout << std::flush;
+            }
         }
     }
 }

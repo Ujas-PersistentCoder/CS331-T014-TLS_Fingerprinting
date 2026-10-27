@@ -113,11 +113,19 @@ int main(int argc, char *argv[]) {
                       << stats.packets_per_second() << " packets/s\n";
         }
     } else {
-        // Output for automated benchmarking: <client_hellos> <server_hellos> <elapsed_ms> <kpps>
-        std::cout << stats.client_hellos << " "
-                  << stats.server_hellos << " "
-                  << std::fixed << std::setprecision(3) << (stats.elapsed_seconds() * 1000.0) << " ms "
-                  << std::fixed << std::setprecision(1) << (stats.packets_per_second() / 1000.0) << " k/s\n";
+        std::cout << "\n\033[1;36m====================================================\033[0m\n"
+                  << "\033[1;37m            Benchmark Execution Summary             \033[0m\n"
+                  << "\033[1;36m====================================================\033[0m\n"
+                  << "Total Packets Scanned : " << stats.total_packets << "\n"
+                  << "ClientHellos Found    : " << stats.client_hellos << "\n"
+                  << "ServerHellos Found    : " << stats.server_hellos << "\n"
+                  << "Execution Time        : " << std::fixed << std::setprecision(3) 
+                  << (stats.elapsed_seconds() * 1000.0) << " ms (" 
+                  << std::setprecision(4) << stats.elapsed_seconds() << " s)\n"
+                  << "Processing Throughput : " << std::fixed << std::setprecision(1) 
+                  << stats.packets_per_second() << " packets/s ("
+                  << std::setprecision(1) << (stats.packets_per_second() / 1000.0) << " kpps)\n"
+                  << "\033[1;36m====================================================\033[0m\n";
     }
 
     return 0;
