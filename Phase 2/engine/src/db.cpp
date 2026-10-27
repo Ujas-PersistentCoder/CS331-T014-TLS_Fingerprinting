@@ -269,10 +269,14 @@ private:
     std::size_t position_{0};
 };
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 bool write_all(int fd, const char *data, std::size_t length) {
     std::size_t total = 0;
     while (total < length) {
-        ssize_t written = ::send(fd, data + total, length - total, 0);
+        ssize_t written = ::send(fd, data + total, length - total, MSG_NOSIGNAL);
         if (written <= 0) {
             if (written < 0 && errno == EINTR) continue;
             return false;

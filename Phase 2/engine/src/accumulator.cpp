@@ -29,25 +29,62 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
             // RFC 1982 sequence distance from base_seq
             int32_t seq_diff = static_cast<int32_t>(seq - flow.base_seq);
 
-            // If segment is before our current accumulation point, it's a duplicate/retransmit; ignore safely
-            if (seq_diff < 0 || static_cast<size_t>(seq_diff) < flow.bytes_accumulated) {
-                return;
-            }
-
-            // If segment is beyond our current accumulation point, a gap occurred; drop flow
-            if (static_cast<size_t>(seq_diff) > flow.bytes_accumulated) {
+            // Forward gap detected: segment arrives after a missing hole
+            if (seq_diff > static_cast<int32_t>(flow.bytes_accumulated)) {
                 active_flows_.erase(it);
                 return;
             }
 
-            size_t bytes_needed = flow.total_expected - flow.bytes_accumulated;
-            size_t bytes_to_copy = std::min(payload_len, bytes_needed);
+            const uint8_t *new_payload = payload;
+            size_t new_payload_len = payload_len;
 
-            std::memcpy(flow.buffer.data() + flow.bytes_accumulated, payload, bytes_to_copy);
-            flow.bytes_accumulated += bytes_to_copy;
+            // Handle overlap / retransmission: segment starts before or at current accumulation point
+            if (seq_diff < static_cast<int32_t>(flow.bytes_accumulated)) {
+                int32_t seg_end = seq_diff + static_cast<int32_t>(payload_len);
+                if (seg_end <= static_cast<int32_t>(flow.bytes_accumulated)) {
+                    // Fully duplicate segment; ignore safely
+                    return;
+                }
+                // Partial overlap: slice off already-accumulated prefix bytes
+                size_t overlap = flow.bytes_accumulated - seq_diff;
+                new_payload += overlap;
+                new_payload_len -= overlap;
+            }
+
+            // If total_expected is 0, we are waiting for at least 5 bytes to decode the TLS record header
+            if (flow.total_expected == 0) {
+                size_t bytes_to_copy = std::min(new_payload_len, static_cast<size_t>(ACCUMULATOR_BUFFER_SIZE - flow.bytes_accumulated));
+                std::memcpy(flow.buffer.data() + flow.bytes_accumulated, new_payload, bytes_to_copy);
+                flow.bytes_accumulated += bytes_to_copy;
+
+                if (flow.bytes_accumulated >= 5) {
+                    uint8_t rec_type = flow.buffer[0];
+                    uint8_t maj_ver  = flow.buffer[1];
+                    uint8_t min_ver  = flow.buffer[2];
+                    if (rec_type != TLS_RECORD_HANDSHAKE || maj_ver != 0x03 || min_ver > 0x04) {
+                        active_flows_.erase(it);
+                        return;
+                    }
+                    uint16_t tls_rec_len = (static_cast<uint16_t>(flow.buffer[3]) << 8) | flow.buffer[4];
+                    size_t total_record_len = 5 + tls_rec_len;
+                    if (tls_rec_len < 4 || total_record_len > ACCUMULATOR_BUFFER_SIZE) {
+                        active_flows_.erase(it);
+                        return;
+                    }
+                    flow.total_expected = total_record_len;
+                } else {
+                    return; // Still less than 5 bytes
+                }
+            } else {
+                size_t bytes_needed = flow.total_expected - flow.bytes_accumulated;
+                size_t bytes_to_copy = std::min(new_payload_len, bytes_needed);
+
+                std::memcpy(flow.buffer.data() + flow.bytes_accumulated, new_payload, bytes_to_copy);
+                flow.bytes_accumulated += bytes_to_copy;
+            }
 
             // Check if full TLS record has been assembled
-            if (flow.bytes_accumulated >= flow.total_expected) {
+            if (flow.total_expected > 0 && flow.bytes_accumulated >= flow.total_expected) {
                 if (on_handshake_ready_) {
                     on_handshake_ready_(key, flow.buffer.data(), flow.total_expected);
                 }
@@ -59,7 +96,16 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
 
     // --- NEW FLOW: Inspect Initial TLS Record Layer ---
     if (payload_len < 5) {
-        return; // Incomplete record header; cannot determine boundary
+        // Buffer partial record header if initial byte indicates a TLS Handshake record (0x16)
+        if (payload[0] == TLS_RECORD_HANDSHAKE && (payload_len == 1 || payload[1] == 0x03)) {
+            FragmentedHandshake &flow = active_flows_[key];
+            flow.total_expected    = 0;
+            flow.base_seq          = seq;
+            flow.last_seen         = current_time;
+            flow.bytes_accumulated = payload_len;
+            std::memcpy(flow.buffer.data(), payload, payload_len);
+        }
+        return;
     }
 
     uint8_t record_type = payload[0];

@@ -23,10 +23,10 @@ void print_usage(const char *prog) {
               << "Options:\n"
               << "  -r <file>        Read and analyze offline PCAP/PCAPNG file\n"
               << "  -i <interface>   Capture live packets from network interface (requires root)\n"
-              << "  -f <filter>      BPF packet filter string (default: \"tcp port 443\")\n"
+              << "  -f <filter>      BPF packet filter string (default: \"tcp\")\n"
               << "  -v               Enable verbose dissection of TLS handshake fields\n"
               << "  -q               Quiet / benchmark mode (suppress output, measure pps)\n"
-              << "  -a               Interactively prompt to label unknown fingerprints\n"
+              << "  -u               Interactively prompt to label unknown fingerprints\n"
               << "  -h               Show this help message and exit\n";
 }
 
@@ -34,10 +34,10 @@ void print_usage(const char *prog) {
 
 int main(int argc, char *argv[]) {
     tlsfp::CaptureOptions options;
-    options.bpf_filter = "tcp port 443";
+    options.bpf_filter = "tcp";
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:i:f:vqah")) != -1) {
+    while ((opt = getopt(argc, argv, "r:i:f:vquh")) != -1) {
         switch (opt) {
             case 'r':
                 options.read_filename = optarg;
@@ -54,7 +54,7 @@ int main(int argc, char *argv[]) {
             case 'q':
                 options.quiet = true;
                 break;
-            case 'a':
+            case 'u':
                 options.prompt_unknown = true;
                 break;
             case 'h':

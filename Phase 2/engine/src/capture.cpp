@@ -49,7 +49,7 @@ inline std::string to_hex(uint16_t val) {
     return std::string(buf);
 }
 
-void print_verbose_client(const ClientHelloData &ch) {
+void print_verbose_client(const ClientHelloData &ch, const JA3Fingerprint &ja3, const JA4Fingerprint &ja4) {
     std::cout << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-Version]     " << Color::RESET
               << Color::YELLOW << to_hex(ch.client_version) << Color::RESET << "\n"
@@ -95,10 +95,16 @@ void print_verbose_client(const ClientHelloData &ch) {
         if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
         std::cout << Color::YELLOW << to_hex(ch.signature_algorithms[i]) << Color::RESET;
     }
-    std::cout << "]\n";
+    std::cout << "]\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-JA3-Raw]     " << Color::RESET
+              << Color::DIM << ja3.raw_string << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-JA4-Raw]     " << Color::RESET
+              << Color::DIM << "b: [" << ja4.raw_ja4_b << "] c: [" << ja4.raw_ja4_c << "]" << Color::RESET << "\n";
 }
 
-void print_verbose_server(const ServerHelloData &sh) {
+void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s, const JA4Fingerprint &ja4s) {
     std::cout << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-Version]     " << Color::RESET
               << Color::YELLOW << to_hex(sh.server_version) << Color::RESET
@@ -120,7 +126,13 @@ void print_verbose_server(const ServerHelloData &sh) {
         if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
         std::cout << Color::YELLOW << to_hex(sh.extensions[i]) << Color::RESET;
     }
-    std::cout << "]\n";
+    std::cout << "]\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-JA3S-Raw]    " << Color::RESET
+              << Color::DIM << ja3s.raw_string << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-JA4S-Raw]    " << Color::RESET
+              << Color::DIM << "c: [" << ja4s.raw_ja4_c << "]" << Color::RESET << "\n";
 }
 
 } // anonymous namespace
@@ -247,9 +259,14 @@ bool CaptureEngine::run() {
 
     stats_.start_time = std::chrono::steady_clock::now();
 
-    pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
+    int ret = pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
 
     stats_.end_time = std::chrono::steady_clock::now();
+
+    if (ret < 0 && ret != -2) { // -2 is expected break from pcap_breakloop
+        std::cerr << Color::RED << "[!] pcap_loop error: " << pcap_geterr(pcap_handle_) << Color::RESET << "\n";
+        return false;
+    }
     return true;
 }
 
@@ -264,11 +281,11 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
             if (pkthdr->caplen < 14) return;
             link_hdr_len = 14;
             ethertype = (static_cast<uint16_t>(packet[12]) << 8) | packet[13];
-            if (ethertype == 0x8100) { // 802.1Q VLAN
+            if (ethertype == 0x8100 || ethertype == 0x88A8) { // 802.1Q or 802.1ad QinQ outer tag
                 if (pkthdr->caplen < 18) return;
                 link_hdr_len = 18;
                 ethertype = (static_cast<uint16_t>(packet[16]) << 8) | packet[17];
-                // Loop over stacked VLAN tags (0x8100 = 802.1Q, 0x88A8 = 802.1ad QinQ)
+                // Loop over stacked inner VLAN tags (0x8100 = 802.1Q, 0x88A8 = 802.1ad QinQ)
                 while ((ethertype == 0x8100 || ethertype == 0x88A8) && 
                        pkthdr->caplen >= link_hdr_len + 4) {
                     ethertype = (static_cast<uint16_t>(packet[link_hdr_len + 2]) << 8) | 
@@ -310,6 +327,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 
     FlowKey key{};
     size_t ip_hdr_len = 0;
+    size_t ip_total_len = 0;
 
     if (ethertype == 0x0800) { // IPv4
         if (pkthdr->caplen < link_hdr_len + 20) return;
@@ -320,6 +338,9 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         if (ip_hdr_len < 20 || pkthdr->caplen < link_hdr_len + ip_hdr_len) return;
         if (ip_ptr[9] != IPPROTO_TCP) return;
 
+        ip_total_len = (static_cast<size_t>(ip_ptr[2]) << 8) | ip_ptr[3];
+        if (ip_total_len < ip_hdr_len) return;
+
         key.ip_version = 4;
         std::memcpy(&key.src_ip.v4.s_addr, ip_ptr + 12, 4);
         std::memcpy(&key.dst_ip.v4.s_addr, ip_ptr + 16, 4);
@@ -327,6 +348,9 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         if (pkthdr->caplen < link_hdr_len + 40) return;
         const uint8_t *ip6_ptr = packet + link_hdr_len;
         if ((ip6_ptr[0] >> 4) != 6) return;
+
+        uint16_t v6_payload_len = (static_cast<uint16_t>(ip6_ptr[4]) << 8) | ip6_ptr[5];
+        ip_total_len = 40 + v6_payload_len;
 
         uint8_t next_proto = ip6_ptr[6];
         size_t ext_offset = link_hdr_len + 40;
@@ -337,7 +361,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         if (next_proto != IPPROTO_TCP) return;
 
         ip_hdr_len = ext_offset - link_hdr_len;
-        if (pkthdr->caplen < link_hdr_len + ip_hdr_len) return;
+        if (pkthdr->caplen < link_hdr_len + ip_hdr_len || ip_total_len < ip_hdr_len) return;
 
         key.ip_version = 6;
         std::memcpy(&key.src_ip.v6, ip6_ptr + 8, 16);
@@ -363,7 +387,12 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     size_t total_hdrs = link_hdr_len + ip_hdr_len + tcp_hdr_len;
     if (pkthdr->caplen <= total_hdrs) return; // Pure ACK, SYN, etc.
 
-    size_t payload_len = pkthdr->caplen - total_hdrs;
+    // Determine available datagram length (clamping Ethernet trailer padding or respecting snaplen truncation)
+    size_t ip_captured = pkthdr->caplen - link_hdr_len;
+    size_t ip_available = std::min(ip_captured, ip_total_len);
+    if (ip_available <= ip_hdr_len + tcp_hdr_len) return;
+
+    size_t payload_len = ip_available - ip_hdr_len - tcp_hdr_len;
     const uint8_t *payload = packet + total_hdrs;
 
     // Middlebox Compatibility TLS 1.3 ChangeCipherSpec stripping (0x14 0x03 0x03 0x00 0x01 0x01)
@@ -389,8 +418,8 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
     uint8_t hs_type = record_data[5]; // Byte 0..4 = Record Header, Byte 5 = Handshake Type
 
     if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
-        stats_.client_hellos++;
         if (parse_client_hello(record_data, record_len, impl_->client_scratchpad)) {
+            stats_.client_hellos++;
             JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
 
@@ -424,15 +453,15 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << (label_ja4 != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4 << "]" << Color::RESET << "\n";
 
             if (options_.verbose) {
-                print_verbose_client(impl_->client_scratchpad);
+                print_verbose_client(impl_->client_scratchpad, ja3, ja4);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
             }
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
-        stats_.server_hellos++;
         if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {
+            stats_.server_hellos++;
             JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
 
@@ -466,7 +495,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << (label_ja4s != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESET << "\n";
 
             if (options_.verbose) {
-                print_verbose_server(impl_->server_scratchpad);
+                print_verbose_server(impl_->server_scratchpad, ja3s, ja4s);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
