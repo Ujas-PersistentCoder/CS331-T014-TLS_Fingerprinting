@@ -74,3 +74,27 @@ target_link_libraries(tlsfp_phase2
     PRIVATE
         tlsfp_phase2_lib
 )
+
+# Enable Testing and GoogleTest
+enable_testing()
+find_package(GTest REQUIRED)
+
+# Test Executable Target
+add_executable(unit_tests
+    tests/test_fingerprints.cpp
+)
+
+target_link_libraries(unit_tests
+    PRIVATE
+        tlsfp_phase2_lib
+        GTest::gtest
+        GTest::gtest_main
+)
+
+# OS-Agnostic RPATH: Automatically embed runtime search paths of linked targets
+set_target_properties(unit_tests PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest_main>;$<TARGET_FILE_DIR:GTest::gtest>"
+)
+
+include(GoogleTest)
+gtest_discover_tests(unit_tests)
