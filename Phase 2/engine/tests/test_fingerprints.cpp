@@ -504,3 +504,173 @@ TEST(JA3STest, ExtensionOrderingPreserved) {
     EXPECT_NE(fp_a.raw_string, fp_b.raw_string);
     EXPECT_NE(fp_a.md5_hash, fp_b.md5_hash);
 }
+// ============================================================
+// LARGE RECEIVE OFFLOAD (LRO) BOUNDARY TESTS
+// ============================================================
+
+TEST_F(AccumulatorTest, LRO_Processes_CoalescedJumboFrame_3KB) {
+    std::vector<uint16_t> large_ciphers;
+    for (uint16_t i = 1; i <= 30; ++i) {
+        large_ciphers.push_back(0x1300 + i);
+    }
+    
+    // Simulate 3 KB coalesced frame from hardware LRO NIC (> 1514 MTU)
+    std::vector<uint8_t> extensions(2800, 0x00);
+    auto lro_record = build_client_hello_record(large_ciphers, extensions);
+
+    ASSERT_GT(lro_record.size(), 1514u) << "LRO frame must exceed standard Ethernet MTU";
+    ASSERT_LE(lro_record.size(), 8192u) << "LRO frame must fit within accumulator buffer ceiling";
+
+    accum.process_segment(test_key, 10000, lro_record.data(), lro_record.size(), 100000);
+
+    // Use ASSERT_EQ to prevent out-of-bounds vector access if empty
+    ASSERT_EQ(received_records.size(), 1u);
+    EXPECT_EQ(received_records[0].size(), lro_record.size());
+    EXPECT_EQ(accum.active_flow_count(), 0u) << "LRO jumbo frame must hit Tier 1 Fast Path";
+}
+
+TEST_F(AccumulatorTest, LRO_Processes_MaxAccumulatorJumboFrame_7KB) {
+    std::vector<uint16_t> large_ciphers;
+    for (uint16_t i = 1; i <= 50; ++i) {
+        large_ciphers.push_back(0x1300 + i);
+    }
+    
+    // Simulate 7 KB coalesced frame near the 8 KB accumulator buffer boundary
+    std::vector<uint8_t> extensions(6800, 0x00);
+    auto max_lro_record = build_client_hello_record(large_ciphers, extensions);
+
+    ASSERT_GT(max_lro_record.size(), 4000u);
+    ASSERT_LE(max_lro_record.size(), 8192u);
+
+    accum.process_segment(test_key, 20000, max_lro_record.data(), max_lro_record.size(), 100000);
+
+    ASSERT_EQ(received_records.size(), 1u);
+    EXPECT_EQ(received_records[0].size(), max_lro_record.size());
+    EXPECT_EQ(accum.active_flow_count(), 0u) << "7 KB LRO frame must process zero-copy without fragmentation";
+}
+
+TEST(LROInvarianceTest, FragmentedVsLROCoalescedYieldsIdenticalJA3) {
+    std::vector<uint16_t> ciphers = {0x1301, 0x1302, 0x1303, 0xc02c, 0xc030};
+    std::vector<uint8_t> extensions(3000, 0x05); // 3 KB payload
+    auto record = build_client_hello_record(ciphers, extensions);
+
+    // 1. Process as single LRO-coalesced frame
+    ClientHelloData client_lro{};
+    ASSERT_TRUE(parse_client_hello(record.data(), record.size(), client_lro));
+    JA3Fingerprint fp_lro = compute_ja3(client_lro);
+
+    // 2. Process as 3 fragmented MTU segments (LRO OFF)
+    std::vector<uint8_t> reassembled;
+    FlowKey key = make_ipv4_key("10.0.0.1", "10.0.0.2", 54321, 443);
+
+    TwoTierAccumulator test_accum([&reassembled](const FlowKey&, const uint8_t* d, size_t l) {
+        reassembled.assign(d, d + l);
+    });
+
+    size_t chunk_size = record.size() / 3;
+    uint32_t seq = 1000;
+    
+    for (size_t i = 0; i < 3; ++i) {
+        size_t offset = i * chunk_size;
+        size_t len = (i == 2) ? (record.size() - offset) : chunk_size;
+        test_accum.process_segment(key, seq + static_cast<uint32_t>(offset), record.data() + offset, len, 10000 + i);
+    }
+
+    ClientHelloData client_fragmented{};
+    ASSERT_TRUE(parse_client_hello(reassembled.data(), reassembled.size(), client_fragmented));
+    JA3Fingerprint fp_fragmented = compute_ja3(client_fragmented);
+
+    // Assert absolute fingerprint invariance between LRO-coalesced and segmented streams
+    EXPECT_EQ(fp_lro.raw_string, fp_fragmented.raw_string);
+    EXPECT_EQ(fp_lro.md5_hash, fp_fragmented.md5_hash);
+}
+
+// ============================================================
+// TIER 2 ACCUMULATOR RESILIENCE TESTS
+// ============================================================
+
+TEST_F(AccumulatorTest, Tier2_EvictsFlowOnSequenceGap) {
+    auto tls_record = build_client_hello_record({0x1301, 0x1302}, std::vector<uint8_t>(400, 0xAA));
+    
+    size_t split = 200;
+    std::vector<uint8_t> seg1(tls_record.begin(), tls_record.begin() + split);
+    std::vector<uint8_t> seg3(tls_record.begin() + split + 50, tls_record.end());
+
+    uint32_t base_seq = 5000;
+
+    // 1. Ingest Segment 1 (Starts Flow)
+    accum.process_segment(test_key, base_seq, seg1.data(), seg1.size(), 100000);
+    EXPECT_EQ(accum.active_flow_count(), 1u);
+
+    // 2. Ingest Segment 3 with a forward gap (skips bytes 200-250)
+    // Engine must detect sequence gap and immediately erase flow state to protect memory
+    accum.process_segment(test_key, base_seq + split + 50, seg3.data(), seg3.size(), 100001);
+
+    EXPECT_EQ(received_records.size(), 0u);
+    EXPECT_EQ(accum.active_flow_count(), 0u) << "Sequence gap must trigger immediate flow eviction";
+}
+
+TEST_F(AccumulatorTest, Tier2_HandlesDuplicateRetransmittedSegments) {
+    auto tls_record = build_client_hello_record({0x1301}, std::vector<uint8_t>(300, 0xBB));
+    
+    size_t split = 150;
+    std::vector<uint8_t> seg1(tls_record.begin(), tls_record.begin() + split);
+    std::vector<uint8_t> seg2(tls_record.begin() + split, tls_record.end());
+
+    uint32_t base_seq = 8000;
+
+    // 1. Ingest Segment 1
+    accum.process_segment(test_key, base_seq, seg1.data(), seg1.size(), 100000);
+    EXPECT_EQ(accum.active_flow_count(), 1u);
+    
+    // 2. Ingest Segment 1 AGAIN (Duplicate TCP Retransmission)
+    accum.process_segment(test_key, base_seq, seg1.data(), seg1.size(), 100001);
+    EXPECT_EQ(received_records.size(), 0u);
+    EXPECT_EQ(accum.active_flow_count(), 1u);
+
+    // 3. Ingest Segment 2 (Completes Stream)
+    accum.process_segment(test_key, base_seq + split, seg2.data(), seg2.size(), 100002);
+
+    ASSERT_EQ(received_records.size(), 1u);
+    EXPECT_EQ(received_records[0], tls_record);
+    EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
+TEST(LinkLayerDemuxTest, HandlesVlanTaggedEthernet) {
+    // Standard Ethernet Header (14 B) + 802.1Q VLAN Tag (4 B) + IPv4 Header (20 B) + TCP Header (20 B)
+    std::vector<uint8_t> packet = {
+        // Ethernet Destination & Source MACs
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        // 802.1Q Tag Type (0x8100) and VLAN ID / Priority (VLAN 100 = 0x0064)
+        0x81, 0x00, 0x00, 0x64,
+        // Inner Protocol: IPv4 (0x0800)
+        0x08, 0x00
+    };
+
+    // Verify offset calculation in your demux logic
+    size_t mac_offset = 14;
+    uint16_t ether_type = (packet[12] << 8) | packet[13];
+    if (ether_type == 0x8100) {
+        mac_offset += 4; // Successfully skipped VLAN header
+    }
+    
+    EXPECT_EQ(mac_offset, 18u);
+}
+
+TEST(TLSParserTest, ParsesClientHelloWhenPipelinedWithSecondRecord) {
+    // Record 1: ClientHello (Valid)
+    auto client_hello_rec = build_client_hello_record({0x1301}, {});
+
+    // Record 2: Application Data dummy record (0x17) appended to the same buffer
+    std::vector<uint8_t> app_data_rec = {0x17, 0x03, 0x03, 0x00, 0x05, 'H', 'e', 'l', 'l', 'o'};
+
+    // Combine into a single TCP payload
+    std::vector<uint8_t> pipelined_payload = client_hello_rec;
+    pipelined_payload.insert(pipelined_payload.end(), app_data_rec.begin(), app_data_rec.end());
+
+    ClientHelloData client_data{};
+    bool success = parse_client_hello(pipelined_payload.data(), pipelined_payload.size(), client_data);
+
+    EXPECT_TRUE(success);
+    EXPECT_EQ(client_data.cipher_suites, std::vector<uint16_t>({0x1301}));
+}
