@@ -23,6 +23,11 @@ struct FingerprintDatabase::RedisValue {
 
 namespace {
 
+inline bool is_server_kind(FingerprintKind kind) noexcept {
+    return kind == FingerprintKind::JA3S || kind == FingerprintKind::JA4S ||
+           kind == FingerprintKind::JA4TS;
+}
+
 class JsonReader {
 public:
     explicit JsonReader(std::string text) : text_(std::move(text)) {}
@@ -39,11 +44,14 @@ public:
 
             std::string section;
             if (!read_string(section) || !consume(':')) return false;
-            if (section == "ja3" || section == "ja3s" || section == "ja4" || section == "ja4s") {
+            if (section == "ja3" || section == "ja3s" || section == "ja4" || section == "ja4s" ||
+                section == "ja4t" || section == "ja4ts") {
                 FingerprintKind kind = FingerprintKind::JA3;
                 if (section == "ja3s") kind = FingerprintKind::JA3S;
                 if (section == "ja4") kind = FingerprintKind::JA4;
                 if (section == "ja4s") kind = FingerprintKind::JA4S;
+                if (section == "ja4t") kind = FingerprintKind::JA4T;
+                if (section == "ja4ts") kind = FingerprintKind::JA4TS;
                 if (!read_seed_array(kind, manifest, records)) return false;
             } else if (!skip_value()) {
                 return false;
@@ -116,11 +124,11 @@ private:
             FingerprintRecord record;
             record.kind = kind;
             record.hash = fields["hash"];
-            record.role = (kind == FingerprintKind::JA3S || kind == FingerprintKind::JA4S)
-                              ? "server" : "client";
+            record.role = is_server_kind(kind) ? "server" : "client";
             record.name = fields.count("client") ? fields["client"] : fields["server"];
             record.version = fields["version"];
             record.os = fields["os"];
+            record.expected_os = fields["expected_os"];
             record.category = fields["category"];
             record.source = fields["source"];
             record.notes = fields["notes"];
@@ -179,6 +187,7 @@ private:
         if (record.name.empty() && metadata.count("name")) record.name = metadata.at("name");
         if (record.version.empty() && metadata.count("version")) record.version = metadata.at("version");
         if (record.os.empty() && metadata.count("os")) record.os = metadata.at("os");
+        if (record.expected_os.empty() && metadata.count("expected_os")) record.expected_os = metadata.at("expected_os");
         if (record.category.empty() && metadata.count("category")) record.category = metadata.at("category");
         if (record.notes.empty() && metadata.count("notes")) record.notes = metadata.at("notes");
     }
@@ -465,6 +474,7 @@ bool FingerprintDatabase::store(const FingerprintRecord &record) {
         "name", record.name,
         "version", record.version,
         "os", record.os,
+        "expected_os", record.expected_os,
         "category", record.category,
         "source", record.source,
         "notes", record.notes
@@ -479,7 +489,7 @@ bool FingerprintDatabase::enroll(FingerprintKind kind, const std::string &hash,
     record.kind = kind;
     record.hash = hash;
     record.name = name;
-    record.role = role.empty() ? (kind == FingerprintKind::JA3S || kind == FingerprintKind::JA4S ? "server" : "client") : role;
+    record.role = role.empty() ? (is_server_kind(kind) ? "server" : "client") : role;
     record.category = "enrolled";
     record.source = "analyst-cli";
     return store(record);
@@ -521,6 +531,7 @@ bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
     record.name = fields["name"];
     record.version = fields["version"];
     record.os = fields["os"];
+    record.expected_os = fields["expected_os"];
     record.category = fields["category"];
     record.source = fields["source"];
     record.notes = fields["notes"];
@@ -592,6 +603,8 @@ const char* FingerprintDatabase::kind_name(FingerprintKind kind) noexcept {
         case FingerprintKind::JA3S: return "ja3s";
         case FingerprintKind::JA4:  return "ja4";
         case FingerprintKind::JA4S: return "ja4s";
+        case FingerprintKind::JA4T:  return "ja4t";
+        case FingerprintKind::JA4TS: return "ja4ts";
     }
     return "unknown";
 }

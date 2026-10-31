@@ -18,6 +18,8 @@ constexpr uint8_t TLS_HANDSHAKE_SERVER_HELLO    = 0x02;
 constexpr size_t MAX_TLS_RECORD_LENGTH = 16384;      // RFC 8446 max record payload (16 KB)
 constexpr size_t ACCUMULATOR_BUFFER_SIZE = 8192;     // 8 KB buffer: covers Kyber/ML-KEM PQ-TLS (2.5-3.5 KB)
 constexpr uint32_t FLOW_TIMEOUT_SECONDS = 3;         // Incomplete handshake expiration window
+constexpr uint32_t SYN_TIMEOUT_SECONDS = 30;         // SYN -> ClientHello correlation window (JA4T)
+constexpr size_t   SYN_TABLE_MAX_ENTRIES = 65536;    // Bound on tracked SYNs (SYN flood guard)
 
 // --- Flow Identification (4-tuple) ---
 struct FlowKey {
@@ -73,7 +75,9 @@ enum class FingerprintKind : uint8_t {
     JA3,
     JA3S,
     JA4,
-    JA4S
+    JA4S,
+    JA4T,  // TCP SYN (client kernel stack)
+    JA4TS  // TCP SYN-ACK (server kernel stack)
 };
 
 struct JA3Fingerprint {

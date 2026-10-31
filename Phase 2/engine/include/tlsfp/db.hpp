@@ -17,7 +17,8 @@ struct FingerprintRecord {
     std::string role;
     std::string name;
     std::string version;
-    std::string os;
+    std::string os;          // Where the fingerprint was observed (informational)
+    std::string expected_os; // OS this TLS stack only ships on; enables the JA4T impersonation check
     std::string category;
     std::string source;
     std::string notes;

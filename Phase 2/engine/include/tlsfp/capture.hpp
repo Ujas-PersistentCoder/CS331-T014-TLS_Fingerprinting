@@ -20,6 +20,7 @@ struct CaptureOptions {
     std::string seed_filename{"code/db/seed_fingerprints.json"};
     std::string manifest_filename{"code/db/capture_manifest.json"};
     std::string legacy_filename{"code/python/fingerprints.json"};
+    std::string extra_catalog_filename; // Optional lab catalog (same schema as seed), loaded last
     std::string redis_host{"127.0.0.1"};
     uint16_t redis_port{6379};
 };
@@ -28,6 +29,9 @@ struct CaptureStats {
     uint64_t total_packets{0};
     uint64_t client_hellos{0};
     uint64_t server_hellos{0};
+    uint64_t tcp_syns{0};            // Client SYNs fingerprinted (JA4T)
+    uint64_t tcp_synacks{0};         // Server SYN-ACKs fingerprinted (JA4TS)
+    uint64_t cross_layer_alerts{0};  // Impersonation / TTL / stack anomaly alerts raised
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point end_time;
 
