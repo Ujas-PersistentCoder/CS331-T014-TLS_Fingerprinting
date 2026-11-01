@@ -17,6 +17,8 @@ const char *parse_status_name(ParseStatus status) noexcept;
 struct EchExtension {
     ParseStatus status{ParseStatus::NotExamined};
     const char *detail{"not examined"}; // Static diagnostic, never a packet-buffer view.
+    // Optional fields distinguish unavailable bytes from observed numeric zero.
+    // Retain only identifiers/lengths, never encapsulation or ciphertext bytes.
     std::optional<uint8_t> variant;
     std::optional<uint16_t> kdf_id;
     std::optional<uint16_t> aead_id;

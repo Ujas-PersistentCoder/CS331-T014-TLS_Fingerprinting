@@ -13,6 +13,12 @@
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <filesystem>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
+#include <thread>
+#include <type_traits>
+#include <algorithm>
 
 namespace tlsfp {
 
@@ -195,9 +201,287 @@ void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s,
               << Color::DIM << "c: [" << ja4s.raw_ja4_c << "]" << Color::RESET << "\n";
 }
 
+FlowKey reverse_flow(FlowKey key) {
+    std::swap(key.src_ip, key.dst_ip);
+    std::swap(key.src_port, key.dst_port);
+    return key;
+}
+
+FlowKey canonical_flow(const FlowKey &key) {
+    // Both directions share a map key. Endpoint sorting is only storage order;
+    // SYN/hello evidence establishes client/server roles, never port-number guesses.
+    const size_t length = key.ip_version == 4 ? 4 : 16;
+    const int order = std::memcmp(&key.src_ip, &key.dst_ip, length);
+    return order > 0 || (order == 0 && ntohs(key.src_port) > ntohs(key.dst_port))
+        ? reverse_flow(key) : key;
+}
+
+std::string json_string(std::string_view value) {
+    // SNI/ALPN originate in untrusted packet bytes. Preserve valid UTF-8 while
+    // escaping controls and invalid bytes so one observation cannot break JSONL.
+    std::string out{"\""};
+    for (size_t i = 0; i < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte >= 0xc2 && byte <= 0xf4) {
+            const size_t count = byte < 0xe0 ? 2 : (byte < 0xf0 ? 3 : 4);
+            bool valid = i + count <= value.size();
+            for (size_t j = 1; valid && j < count; ++j) {
+                const auto continuation = static_cast<unsigned char>(value[i+j]);
+                valid = continuation >= 0x80 && continuation <= 0xbf;
+            }
+            if (valid) {
+                const auto second = static_cast<unsigned char>(value[i+1]);
+                valid = !(byte == 0xe0 && second < 0xa0) && !(byte == 0xed && second >= 0xa0) &&
+                        !(byte == 0xf0 && second < 0x90) && !(byte == 0xf4 && second >= 0x90);
+            }
+            if (valid) { out.append(value.substr(i, count)); i += count - 1; continue; }
+        }
+        if (byte == '"' || byte == '\\') { out += '\\'; out += static_cast<char>(byte); }
+        else if (byte < 32 || byte >= 127) {
+            char escaped[7];
+            std::snprintf(escaped, sizeof(escaped), "\\u%04x", byte);
+            out += escaped;
+        } else out += static_cast<char>(byte);
+    }
+    return out + '"';
+}
+
+template <typename T>
+std::string json_number(const std::optional<T> &value) {
+    if (!value) return "null";
+    if constexpr (std::is_same_v<T, bool>) return *value ? "true" : "false";
+    return std::to_string(*value);
+}
+
+std::string json_text(const std::string &value) {
+    return value.empty() ? "null" : json_string(value);
+}
+
+std::string random_hex(const std::optional<std::array<uint8_t, 32>> &value) {
+    if (!value) return {};
+    std::string out;
+    for (uint8_t byte : *value) {
+        char hex[3]; std::snprintf(hex, sizeof(hex), "%02x", byte); out += hex;
+    }
+    return out;
+}
+
+std::string endpoint_json(const FlowKey &key, bool source) {
+    char address[INET6_ADDRSTRLEN]{};
+    inet_ntop(key.ip_version == 4 ? AF_INET : AF_INET6,
+              source ? &key.src_ip : &key.dst_ip, address, sizeof(address));
+    return "{\"ip\":" + json_string(address) + ",\"port\":" +
+        std::to_string(ntohs(source ? key.src_port : key.dst_port)) + "}";
+}
+
+std::string ech_json(const EchObservation &ech) {
+    std::string out = "{\"presence\":" + json_number(ech.present) + ",\"findings\":[";
+    bool comma = false;
+    for (const auto &finding : {
+            std::pair{DuplicateEch, "duplicate_ech"},
+            std::pair{ForbiddenOuterExtensions, "forbidden_outer_extensions"},
+            std::pair{ExternalInnerMarker, "external_inner_marker"},
+            std::pair{ExportOnlyAead, "export_only_aead"},
+            std::pair{EmptyEncContextUnknown, "empty_enc_context_unknown"},
+            std::pair{EmptyEncInInitialHello, "empty_enc_in_initial_hello"}}) {
+        if (!(ech.findings & finding.first)) continue;
+        if (comma) out += ',';
+        comma = true; out += json_string(finding.second);
+    }
+    out += "],\"occurrences\":[";
+    comma = false;
+    for (const auto &body : ech.occurrences) {
+        if (comma) out += ',';
+        comma = true;
+        out += "{\"status\":" + json_string(parse_status_name(body.status)) +
+            ",\"detail\":" + json_string(body.detail) +
+            ",\"variant\":" + json_number(body.variant) + ",\"kdf_id\":" + json_number(body.kdf_id) +
+            ",\"aead_id\":" + json_number(body.aead_id) + ",\"config_id\":" + json_number(body.config_id) +
+            ",\"enc_length\":" + json_number(body.enc_length) +
+            ",\"ciphertext_length\":" + json_number(body.payload_length) + "}";
+    }
+    return out + "]}";
+}
+
+// Connection observations own their data: parser string_views borrow buffers
+// that disappear after record delivery. Keep correlation/output here and ECH
+// decoding/interpretation in their focused modules (strategy document, §3).
+struct ClientObservation {
+    ParseStatus status{ParseStatus::NotExamined};
+    std::string detail, random, sni, alpn, ja3, ja4;
+    EchObservation ech;
+};
+struct ServerObservation {
+    ParseStatus status{ParseStatus::NotExamined};
+    std::string detail, ja3s, ja4s;
+    std::optional<uint16_t> version;
+};
+struct TransportIssue { ParseStatus status; std::string reason; };
+struct Connection {
+    // One bounded TCP generation, distinct from per-direction record buffers.
+    // Transport issues coexist with complete hellos; neither erases the other.
+    FlowKey key;
+    uint64_t id{0}, first_us{0}, last_us{0}, recency{0};
+    double idle_at{0};
+    std::optional<bool> client_at_a;
+    std::optional<uint32_t> syn_seq[2];
+    bool tls_candidate{false}, emitted{false}, closed{false}, hrr_seen{false}, role_conflict{false};
+    bool protected_direction[2]{false, false};
+    bool tls13_offered{false};
+    bool unexpected_client_hello{false};
+    std::optional<ClientObservation> client;
+    std::optional<ServerObservation> server;
+    ParseStatus direction_status[2]{ParseStatus::NotExamined, ParseStatus::NotExamined};
+    std::vector<TransportIssue> issues[2];
+
+    int direction(const FlowKey &flow) const { return flow == key ? 0 : 1; }
+    void orient(bool client_a) {
+        if (role_conflict) return;
+        if (client_at_a && *client_at_a != client_a) {
+            role_conflict = true;
+            client_at_a.reset();
+        }
+        else client_at_a = client_a;
+    }
+};
+
+std::string client_json(const Connection &connection) {
+    const ClientObservation empty;
+    const auto &client = connection.client ? *connection.client : empty;
+    ParseStatus status = client.status;
+    if (!connection.client && connection.client_at_a)
+        status = connection.direction_status[*connection.client_at_a ? 0 : 1];
+    return "{\"status\":" + json_string(parse_status_name(status)) + ",\"detail\":" + json_text(client.detail) +
+        ",\"outer_random\":" + json_text(client.random) + ",\"outer_sni\":" + json_text(client.sni) +
+        ",\"alpn\":" + json_text(client.alpn) + ",\"ech\":" + ech_json(client.ech) +
+        ",\"ja3\":" + json_text(client.ja3) + ",\"ja4\":" + json_text(client.ja4) + "}";
+}
+
+std::string server_json(const Connection &connection) {
+    const ServerObservation empty;
+    const auto &server = connection.server ? *connection.server : empty;
+    ParseStatus status = server.status;
+    if (!connection.server && connection.client_at_a)
+        status = connection.direction_status[*connection.client_at_a ? 1 : 0];
+    return "{\"status\":" + json_string(parse_status_name(status)) + ",\"detail\":" + json_text(server.detail) +
+        ",\"negotiated_version\":" + json_number(server.version) +
+        ",\"hrr_seen\":" + (connection.hrr_seen ? "true" : "false") +
+        ",\"ja3s\":" + json_text(server.ja3s) + ",\"ja4s\":" + json_text(server.ja4s) + "}";
+}
+
+bool non_acceptance_observed(const Connection &connection) {
+    // I3 requires a consistent pair. Retries are deliberately excluded because
+    // recognizing HRR does not implement the optional CH1/HRR/CH2 evidence rules.
+    if (connection.role_conflict || connection.hrr_seen || connection.unexpected_client_hello || !connection.client || !connection.server ||
+        connection.client->status != ParseStatus::Complete ||
+        connection.server->status != ParseStatus::Complete || connection.client->ech.present != true)
+        return false;
+    return ech_non_acceptance_observed(connection.client->ech, connection.client->status,
+                                       connection.server->status, connection.server->version);
+}
+
 } // anonymous namespace
 
 struct CaptureEngine::Impl {
+    explicit Impl(const CaptureOptions &settings) : options(settings) {
+        static std::atomic<uint64_t> serial{0};
+        capture_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
+            "-" + std::to_string(getpid()) + "-" + std::to_string(++serial);
+        if (!options.max_connections || options.connection_timeout_seconds <= 0) {
+            failed = true;
+            std::cerr << "Invalid connection capacity or timeout\n";
+        }
+        if (!options.json_filename.empty()) {
+            // Capture artifacts may be used for independent label joins. Exclusive
+            // creation prevents overwriting a prior run; restrict local file access.
+            json_fd = open(options.json_filename.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+            if (json_fd < 0) {
+                failed = true;
+                std::cerr << "Cannot create JSON output " << options.json_filename << ": " << std::strerror(errno) << "\n";
+            }
+        }
+    }
+    ~Impl() { if (json_fd >= 0) close(json_fd); }
+    const CaptureOptions &options;
+    std::unordered_map<FlowKey, Connection, FlowHash> connections;
+    std::string capture_id;
+    uint64_t next_id{0}, recency{0}, watermark_us{0};
+    double now{0}, next_sweep{-1};
+    int json_fd{-1};
+    bool failed{false};
+
+    double clock_now() const {
+        if (options.monotonic_clock) return options.monotonic_clock();
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    void emit(Connection &connection, const char *reason) {
+        if (connection.emitted || !connection.tls_candidate) return;
+        connection.emitted = true;
+        // A complete hello pair means framing/correlation succeeded, not that TLS
+        // completed. Real-versus-GREASE stays unknown; ordinary ECH acceptance
+        // confirmation needs inner-handshake information absent at this tap.
+        const bool non_acceptance = non_acceptance_observed(connection);
+        const bool complete = !connection.role_conflict && !connection.unexpected_client_hello && connection.client && connection.server &&
+            connection.client->status == ParseStatus::Complete && connection.server->status == ParseStatus::Complete;
+        std::string output = "{\"schema_version\":1,\"capture_id\":" + json_string(capture_id) +
+            ",\"connection_id\":" + std::to_string(connection.id) + ",\"capture_source\":" +
+            json_string(options.read_filename.empty() ? options.interface_name : options.read_filename) +
+            ",\"ip_version\":" + std::to_string(connection.key.ip_version) +
+            ",\"endpoint_a\":" + endpoint_json(connection.key, true) +
+            ",\"endpoint_b\":" + endpoint_json(connection.key, false) + ",\"client_endpoint\":" +
+            (!connection.client_at_a ? "null" : json_string(*connection.client_at_a ? "a" : "b")) +
+            ",\"first_observation_us\":" + std::to_string(connection.first_us) +
+            ",\"last_observation_us\":" + std::to_string(connection.last_us) +
+            ",\"completion_reason\":" + json_string(reason) + ",\"complete_hello_pair\":" + (complete ? "true" : "false") +
+            ",\"client\":" + client_json(connection) + ",\"server\":" + server_json(connection) +
+            ",\"interpretation\":{\"offer_type\":\"unknown\",\"acceptance\":" +
+            json_string(non_acceptance ? "non_acceptance_observed" : "unverified") +
+            ",\"evidence\":" + (non_acceptance ? "[\"I3_negotiated_below_tls13\"]" : "[]") + "},\"limitations\":[";
+        bool comma = false;
+        const auto add_limit = [&](const std::string &limit) {
+            if (comma) output += ',';
+            comma = true; output += json_string(limit);
+        };
+        if (connection.hrr_seen) add_limit("hrr_sequence_not_analyzed");
+        if (connection.role_conflict) add_limit("conflicting_endpoint_roles");
+        if (connection.unexpected_client_hello) add_limit("unexpected_additional_client_hello");
+        output += "],\"transport\":[";
+        for (int direction = 0; direction < 2; ++direction) {
+            if (direction) output += ',';
+            output += "{\"endpoint\":" + json_string(direction ? "b" : "a") +
+                ",\"status\":" + json_string(parse_status_name(connection.direction_status[direction])) + ",\"issues\":[";
+            for (size_t i = 0; i < connection.issues[direction].size(); ++i) {
+                if (i) output += ',';
+                const auto &issue = connection.issues[direction][i];
+                output += "{\"status\":" + json_string(parse_status_name(issue.status)) +
+                    ",\"reason\":" + json_string(issue.reason) + "}";
+            }
+            output += "]}";
+        }
+        output += "]}\n";
+        if (!failed && json_fd >= 0) {
+            size_t offset = 0;
+            while (offset < output.size()) {
+                const auto count = write(json_fd, output.data() + offset, output.size() - offset);
+                if (count < 0 && errno == EINTR) continue;
+                if (count <= 0) {
+                    failed = true;
+                    std::cerr << "JSON output write failed: " << std::strerror(errno) << "\n";
+                    break;
+                }
+                offset += static_cast<size_t>(count);
+            }
+        }
+        if (options.verbose && !options.quiet)
+            std::cout << "[Connection summary] id=" << connection.id << " reason=" << reason
+                      << " acceptance=" << (non_acceptance ? "non_acceptance_observed" : "unverified") << "\n";
+        // Release owned observations after the single summary. Retain lifecycle
+        // markers so retransmissions cannot create another summary before expiry.
+        connection.client.reset();
+        connection.server.reset();
+        for (auto &issues : connection.issues) std::vector<TransportIssue>().swap(issues);
+    }
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
     std::unique_ptr<FingerprintDatabase> db;
@@ -230,18 +514,15 @@ struct CaptureEngine::Impl {
 
 CaptureEngine::CaptureEngine(CaptureOptions options)
     : options_(std::move(options)),
-      impl_(std::make_unique<Impl>()) {
+      impl_(std::make_unique<Impl>(options_)) {
     accumulator_ = std::make_unique<TwoTierAccumulator>(
         [this](const FlowKey &key, const uint8_t *record, size_t len) {
             this->process_assembled_handshake(key, record, len);
         },
-        [this](const FlowKey &key) {
-            if (options_.verbose && !options_.quiet) {
-                // A short oversized-record header need not reveal its hello type.
-                print_parse_diagnostic(key, "TLS record");
-                std::cout << "   │  status=unsupported (TLS record exceeds 8192-byte supported limit)\n";
-            }
-        }
+        TwoTierAccumulator::RecordLimitCallback{},
+        [this](const FlowKey &key, ParseStatus status, const char *reason, const uint8_t *prefix, size_t length) {
+            record_issue(key, status, reason, prefix, length);
+        }, options_.max_connections * 2
     );
 }
 
@@ -322,19 +603,38 @@ static void global_pcap_callback(u_char *user, const struct pcap_pkthdr *h, cons
 }
 
 bool CaptureEngine::run() {
+    if (impl_->failed) return false;
     if (!setup_pcap()) return false;
 
     stats_.start_time = std::chrono::steady_clock::now();
 
-    int ret = pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
+    const bool live = options_.read_filename.empty();
+    if (live) {
+        // Nonblocking dispatch permits idle maintenance even when no packets
+        // arrive; otherwise unfinished observations might never time out.
+        char error[PCAP_ERRBUF_SIZE]{};
+        if (pcap_setnonblock(pcap_handle_, 1, error) < 0) {
+            std::cerr << "Cannot enable nonblocking capture: " << error << "\n";
+            return false;
+        }
+    }
+    int ret = 0;
+    while (!stop_requested_ && !impl_->failed) {
+        ret = pcap_dispatch(pcap_handle_, 64, global_pcap_callback, reinterpret_cast<u_char*>(this));
+        maintenance();
+        if (ret < 0 || (!live && ret == 0)) break;
+        if (live && ret == 0) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     stats_.end_time = std::chrono::steady_clock::now();
 
     if (ret < 0 && ret != -2) { // -2 is expected break from pcap_breakloop
-        std::cerr << Color::RED << "[!] pcap_loop error: " << pcap_geterr(pcap_handle_) << Color::RESET << "\n";
+        std::cerr << Color::RED << "[!] Capture read error: " << pcap_geterr(pcap_handle_) << Color::RESET << "\n";
+        finish_capture("capture_error");
         return false;
     }
-    return true;
+    return finish_capture(impl_->failed ? "capture_error" :
+                          (stop_requested_ || ret == -2 ? "interrupted" : "end_of_capture"));
 }
 
 void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_t *packet) {
@@ -452,43 +752,261 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     if (tcp_hdr_len < 20 || pkthdr->caplen < link_hdr_len + ip_hdr_len + tcp_hdr_len) return;
 
     size_t total_hdrs = link_hdr_len + ip_hdr_len + tcp_hdr_len;
-    if (pkthdr->caplen <= total_hdrs) return; // Pure ACK, SYN, etc.
 
     // Determine available datagram length (clamping Ethernet trailer padding or respecting snaplen truncation)
     size_t ip_captured = pkthdr->caplen - link_hdr_len;
     size_t ip_available = std::min(ip_captured, ip_total_len);
-    if (ip_available <= ip_hdr_len + tcp_hdr_len) return;
+    if (ip_total_len < ip_hdr_len + tcp_hdr_len) return;
+    if (ip_available < ip_hdr_len + tcp_hdr_len) return;
 
     size_t payload_len = ip_available - ip_hdr_len - tcp_hdr_len;
     const uint8_t *payload = packet + total_hdrs;
 
-    // Middlebox Compatibility TLS 1.3 ChangeCipherSpec stripping (0x14 0x03 0x03 0x00 0x01 0x01)
-    if (payload_len >= 6 &&
-        payload[0] == 0x14 && payload[1] == 0x03 && payload[2] == 0x03 &&
-        payload[3] == 0x00 && payload[4] == 0x01 && payload[5] == 0x01) {
-        payload += 6;
-        payload_len -= 6;
-        seq += 6;
-    }
-
-    if (payload_len == 0) return;
-
-    // Feed to Two-Tier Accumulator
-    accumulator_->process_segment(key, seq, payload, payload_len, pkthdr->ts.tv_sec);
+    const uint64_t stamp = uint64_t{static_cast<uint64_t>(pkthdr->ts.tv_sec)} * 1000000 +
+        static_cast<uint64_t>(pcap_handle_ && pcap_get_tstamp_precision(pcap_handle_) == PCAP_TSTAMP_PRECISION_NANO ?
+                              pkthdr->ts.tv_usec / 1000 : pkthdr->ts.tv_usec);
+    ingest_tcp_segment(key, seq, tcp_ptr[13], payload, payload_len, stamp, ip_captured < ip_total_len);
 }
 
-void CaptureEngine::process_assembled_handshake(const FlowKey &key, 
+void CaptureEngine::maintenance() {
+    // Offline expiry follows a nondecreasing capture-time watermark so replay
+    // speed and timestamp regressions do not change timeout behavior. Live expiry
+    // uses a monotonic clock to tolerate wall-clock adjustments and idle periods.
+    impl_->now = options_.read_filename.empty() ? impl_->clock_now() : impl_->watermark_us / 1000000.0;
+    if (impl_->now < impl_->next_sweep) return;
+    impl_->next_sweep = impl_->now + 0.1;
+    accumulator_->cleanup_stale_flows(static_cast<time_t>(impl_->now));
+    for (auto it = impl_->connections.begin(); it != impl_->connections.end();) {
+        if (impl_->now - it->second.idle_at > options_.connection_timeout_seconds) {
+            impl_->emit(it->second, "timeout");
+            accumulator_->forget_flow(it->first);
+            accumulator_->forget_flow(reverse_flow(it->first));
+            it = impl_->connections.erase(it);
+        } else ++it;
+    }
+}
+
+size_t CaptureEngine::retained_connection_count() const noexcept { return impl_->connections.size(); }
+
+bool CaptureEngine::finish_capture(const char *reason) {
+    accumulator_->flush_pending(reason);
+    std::vector<Connection *> ordered;
+    for (auto &[key, connection] : impl_->connections) ordered.push_back(&connection);
+    std::sort(ordered.begin(), ordered.end(), [](const auto *a, const auto *b) { return a->id < b->id; });
+    for (auto *connection : ordered) {
+        impl_->emit(*connection, reason);
+        accumulator_->forget_flow(connection->key);
+        accumulator_->forget_flow(reverse_flow(connection->key));
+    }
+    impl_->connections.clear();
+    return !impl_->failed;
+}
+
+void CaptureEngine::record_issue(const FlowKey &key, ParseStatus status, const char *reason,
+                                  const uint8_t *prefix, size_t length) {
+    auto it = impl_->connections.find(canonical_flow(key));
+    if (it == impl_->connections.end() || it->second.emitted) return;
+    auto &connection = it->second;
+    const int direction = connection.direction(key);
+    auto &issues = connection.issues[direction];
+    if (std::any_of(issues.begin(), issues.end(), [reason](const auto &issue) { return issue.reason == reason; })) return;
+    issues.push_back({status, reason});
+    if (connection.direction_status[direction] == ParseStatus::NotExamined ||
+        connection.direction_status[direction] == ParseStatus::Complete)
+        connection.direction_status[direction] = status;
+    if (prefix && length >= 6 && prefix[0] == TLS_RECORD_HANDSHAKE) {
+        if (prefix[5] == TLS_HANDSHAKE_CLIENT_HELLO) {
+            connection.orient(direction == 0);
+            if (!connection.client) {
+                ClientObservation observation;
+                observation.status = status; observation.detail = reason;
+                connection.client = std::move(observation);
+            }
+        } else if (prefix[5] == TLS_HANDSHAKE_SERVER_HELLO) {
+            connection.orient(direction != 0);
+        }
+    }
+    if (connection.tls_candidate && options_.verbose && !options_.quiet) {
+        print_parse_diagnostic(key, "TLS record");
+        std::cout << "   │  status=" << parse_status_name(status) << " (" << reason << ")\n";
+    }
+}
+
+void CaptureEngine::ingest_tcp_segment(const FlowKey &key, uint32_t seq, uint8_t flags,
+                                        const uint8_t *payload, size_t length, uint64_t timestamp_us,
+                                        bool truncated) {
+    if (impl_->failed) return;
+    impl_->watermark_us = std::max(impl_->watermark_us, timestamp_us);
+    maintenance();
+    const FlowKey canonical = canonical_flow(key);
+    const int direction = key == canonical ? 0 : 1;
+    const bool initial_syn = (flags & TH_SYN) && !(flags & TH_ACK);
+    auto it = impl_->connections.find(canonical);
+    // The same tuple can be reused. A new initial sequence number (or SYN after
+    // closure) starts a new generation; a retransmitted opening SYN preserves it.
+    if (it != impl_->connections.end() && initial_syn &&
+        (it->second.closed || !it->second.syn_seq[direction] || *it->second.syn_seq[direction] != seq)) {
+        accumulator_->invalidate_flow(canonical, "connection_replaced", true);
+        accumulator_->invalidate_flow(reverse_flow(canonical), "connection_replaced", true);
+        impl_->emit(it->second, "connection_replaced");
+        accumulator_->forget_flow(canonical); accumulator_->forget_flow(reverse_flow(canonical));
+        impl_->connections.erase(it);
+        it = impl_->connections.end();
+    }
+    const bool tls_start = payload && length && payload[0] >= 20 && payload[0] <= 24;
+    if (it == impl_->connections.end()) {
+        if (!(flags & TH_SYN) && !tls_start) return;
+        if (impl_->connections.size() >= options_.max_connections) {
+            // Bound all retained generations, including SYN hints and completion
+            // markers. Evict by observation recency and summarize any TLS candidate.
+            auto oldest = std::min_element(impl_->connections.begin(), impl_->connections.end(),
+                [](const auto &a, const auto &b) { return a.second.recency < b.second.recency; });
+            if (oldest == impl_->connections.end()) return;
+            accumulator_->invalidate_flow(oldest->first, "capacity_limit", true);
+            accumulator_->invalidate_flow(reverse_flow(oldest->first), "capacity_limit", true);
+            impl_->emit(oldest->second, "capacity_limit");
+            accumulator_->forget_flow(oldest->first); accumulator_->forget_flow(reverse_flow(oldest->first));
+            impl_->connections.erase(oldest);
+        }
+        Connection connection;
+        connection.key = canonical;
+        connection.id = ++impl_->next_id;
+        connection.first_us = timestamp_us;
+        it = impl_->connections.emplace(canonical, std::move(connection)).first;
+    }
+    auto &connection = it->second;
+    connection.last_us = std::max(connection.last_us, timestamp_us);
+    connection.idle_at = impl_->now;
+    connection.recency = ++impl_->recency;
+    if (initial_syn) connection.orient(direction == 0);
+    if ((flags & TH_SYN) && !connection.syn_seq[direction]) {
+        connection.syn_seq[direction] = seq;
+        // SYN occupies one TCP sequence number before any payload, including
+        // when data accompanies the SYN. Anchor framing to the first data byte.
+        accumulator_->start_flow(key, seq + 1, static_cast<time_t>(impl_->now));
+    }
+    connection.tls_candidate |= tls_start;
+    if (!connection.emitted && !connection.closed && (length || truncated)) {
+        if (truncated) {
+            record_issue(key, ParseStatus::Incomplete, "capture_truncated", payload, length);
+            accumulator_->invalidate_flow(key, "capture_truncated");
+        } else {
+            accumulator_->process_segment(key, seq + ((flags & TH_SYN) ? 1 : 0), payload,
+                                          length, static_cast<time_t>(impl_->now));
+        }
+    }
+    if (flags & (TH_FIN | TH_RST)) {
+        // A closing segment may carry the final hello bytes. Process its payload
+        // first, then finalize pending observations without claiming ECH absence.
+        accumulator_->invalidate_flow(key, "connection_closed", true);
+        accumulator_->invalidate_flow(reverse_flow(key), "connection_closed", true);
+        impl_->emit(connection, flags & TH_RST ? "rst" : "fin");
+        connection.closed = true;
+    }
+    if (connection.emitted || connection.closed) {
+        accumulator_->stop_flow(canonical);
+        accumulator_->stop_flow(reverse_flow(canonical));
+    }
+}
+
+void CaptureEngine::process_assembled_handshake(const FlowKey &key, const uint8_t *record, size_t length) {
+    auto it = impl_->connections.find(canonical_flow(key));
+    if (it == impl_->connections.end() || it->second.emitted || length < 5) return;
+    auto &connection = it->second;
+    const int direction = connection.direction(key);
+    if (connection.protected_direction[direction]) return;
+    if (connection.direction_status[direction] == ParseStatus::NotExamined)
+        connection.direction_status[direction] = ParseStatus::Complete;
+    if (record[0] == TLS_RECORD_CHANGE_CIPHER_SPEC) {
+        if (length != 6 || record[5] != 1) {
+            connection.protected_direction[direction] = true;
+            record_issue(key, ParseStatus::Malformed, "invalid_change_cipher_spec", nullptr, 0);
+            return;
+        }
+        // Offering TLS 1.3 alone does not establish the negotiated version:
+        // TLS 1.2 encrypts Handshake-type records after CCS. Before the final
+        // hello, accept a compatibility CCS only in a retry context or at the
+        // exact SYN-anchored server start (no unseen earlier ServerHello).
+        const bool server_start = connection.client_at_a &&
+            direction == (*connection.client_at_a ? 1 : 0) && connection.syn_seq[direction] &&
+            connection.tls13_offered;
+        if (!server_start && !connection.hrr_seen) {
+            connection.protected_direction[direction] = true;
+            record_issue(key, ParseStatus::Unsupported, "ccs_plaintext_context_unknown", nullptr, 0);
+        }
+        return;
+    }
+    if (record[0] == 23) {
+        // TLS 1.3 protected handshake messages use outer application_data type 23.
+        // No decryption is attempted; encrypted bytes cannot be read as extensions.
+        connection.protected_direction[direction] = true;
+        record_issue(key, ParseStatus::Unsupported, "encrypted_record_before_final_hello", nullptr, 0);
+        return;
+    }
+    if (record[0] != TLS_RECORD_HANDSHAKE) return;
+    size_t offset = 5;
+    while (offset < length && !connection.emitted) {
+        const size_t available = length - offset;
+        size_t message_length = available;
+        bool complete = false;
+        if (available >= 4) {
+            message_length = 4 + (size_t{record[offset+1]} << 16) +
+                (size_t{record[offset+2]} << 8) + record[offset+3];
+            complete = message_length <= available;
+        }
+        const bool hello = record[offset] == 1 || record[offset] == 2;
+        if (hello) {
+            // Reuse the shared record parser for each message, bounded to this
+            // message's bytes. Synthetic framing owns no data beyond the callback.
+            const size_t count = complete ? message_length : available;
+            std::vector<uint8_t> framed(record, record + 5);
+            framed[3] = static_cast<uint8_t>(count >> 8); framed[4] = static_cast<uint8_t>(count);
+            framed.insert(framed.end(), record + offset, record + offset + count);
+            process_hello(key, framed.data(), framed.size());
+        }
+        if (!complete) {
+            record_issue(key, ParseStatus::Unsupported, "handshake_spans_records", nullptr, 0);
+            connection.protected_direction[direction] = true;
+            return;
+        }
+        offset += message_length;
+    }
+}
+
+void CaptureEngine::process_hello(const FlowKey &key,
                                                 const uint8_t *record_data, 
                                                 size_t record_len) {
     if (record_len < 6 || record_data[0] != TLS_RECORD_HANDSHAKE) return;
 
     uint8_t hs_type = record_data[5]; // Byte 0..4 = Record Header, Byte 5 = Handshake Type
+    auto it = impl_->connections.find(canonical_flow(key));
+    if (it == impl_->connections.end() || it->second.emitted) return;
+    auto &connection = it->second;
+    const int direction = connection.direction(key);
 
     if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
+        connection.orient(direction == 0);
         if (parse_client_hello(record_data, record_len, impl_->client_scratchpad)) {
+            const auto &client = impl_->client_scratchpad;
+            analyze_ech(impl_->client_scratchpad.ech,
+                        connection.hrr_seen ? HelloRole::AfterHrr :
+                        (connection.syn_seq[direction] ? HelloRole::Initial : HelloRole::Unknown));
             stats_.client_hellos++;
             JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
+            if (connection.client && !connection.hrr_seen) connection.unexpected_client_hello = true;
+            if (!connection.client) {
+                // CH1 is the baseline across retries. Copy only visible outer
+                // metadata; endpoint labels/secrets belong to the external harness.
+                ClientObservation observation;
+                observation.status = client.parse_status; observation.detail = client.parse_detail;
+                observation.random = random_hex(client.outer_random);
+                observation.sni = std::string(client.sni); observation.alpn = std::string(client.first_alpn);
+                observation.ech = client.ech; observation.ja3 = ja3.md5_hash; observation.ja4 = ja4.full_fp;
+                connection.client = std::move(observation);
+                connection.tls13_offered = std::find(client.supported_versions.begin(), client.supported_versions.end(), 0x0304)
+                    != client.supported_versions.end();
+            }
 
             if (options_.quiet) return;
 
@@ -525,15 +1043,43 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
             }
-        } else if (options_.verbose && !options_.quiet) {
-            print_parse_diagnostic(key, "ClientHello");
-            print_ech_observation(impl_->client_scratchpad);
+        } else {
+            const auto &client = impl_->client_scratchpad;
+            if (!connection.client) {
+                ClientObservation observation;
+                observation.status = client.parse_status; observation.detail = client.parse_detail;
+                observation.random = random_hex(client.outer_random); observation.ech = client.ech;
+                connection.client = std::move(observation);
+            }
+            record_issue(key, client.parse_status, client.parse_detail, nullptr, 0);
+            if (options_.verbose && !options_.quiet) {
+                print_parse_diagnostic(key, "ClientHello");
+                print_ech_observation(client);
+            }
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
+        connection.orient(direction != 0);
         if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {
+            const auto &server = impl_->server_scratchpad;
+            if (server.is_hrr) {
+                // HRR requests another ClientHello, so neither final-server
+                // fingerprints nor a final summary are appropriate yet. Merely
+                // recognizing HRR provides no real/GREASE or acceptance verdict.
+                connection.hrr_seen = true;
+                if (options_.verbose && !options_.quiet) std::cout << "[HRR] waiting for final ServerHello; sequence analysis unsupported\n";
+                return;
+            }
             stats_.server_hellos++;
             JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
+            ServerObservation observation;
+            observation.status = server.parse_status; observation.detail = server.parse_detail;
+            observation.version = server.selected_version;
+            observation.ja3s = ja3s.md5_hash; observation.ja4s = ja4s.full_fp;
+            connection.server = std::move(observation);
+            // The initial-response study ends at the final ServerHello. Later
+            // encrypted handshake/application traffic is outside this summary.
+            impl_->emit(connection, "final_server_hello");
 
             if (options_.quiet) return;
 
@@ -570,6 +1116,12 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
             }
+        } else {
+            const auto &server = impl_->server_scratchpad;
+            ServerObservation observation;
+            observation.status = server.parse_status; observation.detail = server.parse_detail;
+            connection.server = std::move(observation);
+            record_issue(key, server.parse_status, server.parse_detail, nullptr, 0);
         }
     }
 }

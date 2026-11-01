@@ -89,6 +89,7 @@ add_executable(unit_tests
     tests/test_fingerprints.cpp
     tests/test_ech_parser.cpp
     tests/test_ech_analysis.cpp
+    tests/test_ech_connections.cpp
 )
 
 target_compile_definitions(unit_tests PRIVATE

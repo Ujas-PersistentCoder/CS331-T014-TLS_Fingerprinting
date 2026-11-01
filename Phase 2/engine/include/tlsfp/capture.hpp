@@ -7,10 +7,17 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include <functional>
+#include <atomic>
 
 namespace tlsfp {
 
 struct CaptureOptions {
+    std::string json_filename;
+    size_t max_connections{1024};
+    double connection_timeout_seconds{30};
+    // Empty selects steady_clock. Injection permits deterministic idle tests.
+    std::function<double()> monotonic_clock;
     std::string read_filename;    // Offline PCAP path
     std::string interface_name;   // Live capture interface (e.g., eth0)
     std::string bpf_filter{"tcp"};
@@ -57,6 +64,16 @@ public:
      */
     bool run();
 
+    // The same TCP ingestion path used by packet capture, also usable by embedders.
+    // Ingestion, maintenance, and finalization belong to one capture thread.
+    // Only stop() may be invoked from another thread.
+    void ingest_tcp_segment(const FlowKey &, uint32_t seq, uint8_t flags,
+                            const uint8_t *payload, size_t length, uint64_t timestamp_us,
+                            bool truncated = false);
+    void maintenance();
+    bool finish_capture(const char *reason = "end_of_capture");
+    [[nodiscard]] size_t retained_connection_count() const noexcept;
+
     /**
      * @brief Handle raw packet delivered by libpcap callback.
      */
@@ -78,12 +95,14 @@ private:
     void process_assembled_handshake(const FlowKey &key, 
                                      const uint8_t *record_data, 
                                      size_t record_len);
+    void process_hello(const FlowKey &, const uint8_t *, size_t);
+    void record_issue(const FlowKey &, ParseStatus, const char *, const uint8_t *, size_t);
 
     CaptureOptions options_;
     CaptureStats stats_;
     pcap_t *pcap_handle_{nullptr};
     int datalink_type_{0};
-    bool stop_requested_{false};
+    std::atomic<bool> stop_requested_{false};
     std::unique_ptr<TwoTierAccumulator> accumulator_;
 
     // Forward declarations for DB & parser scratchpads are hooked in implementation

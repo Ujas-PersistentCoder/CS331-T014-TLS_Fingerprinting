@@ -97,6 +97,8 @@ public:
     }
 
     std::optional<ByteReader> spawn_sub_reader(size_t len) noexcept {
+        // Nested TLS lengths get independent bounds, preventing one field from
+        // consuming its neighbour. The sub-reader borrows the original storage.
         if (!has_bytes(len)) return std::nullopt;
         ByteReader sub(data_ + offset_, len);
         offset_ += len;

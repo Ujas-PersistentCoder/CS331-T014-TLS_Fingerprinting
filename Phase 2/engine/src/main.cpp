@@ -3,6 +3,7 @@
 #include <csignal>
 #include <atomic>
 #include <unistd.h>
+#include <getopt.h>
 #include <iomanip>
 
 namespace {
@@ -27,6 +28,7 @@ void print_usage(const char *prog) {
               << "  -v               Enable verbose dissection of TLS handshake fields\n"
               << "  -q               Quiet / benchmark mode (suppress output, measure pps)\n"
               << "  -u               Interactively prompt to label unknown fingerprints\n"
+              << "  --json <file>    Create a new JSON Lines file of connection summaries\n"
               << "  -h               Show this help message and exit\n";
 }
 
@@ -37,8 +39,16 @@ int main(int argc, char *argv[]) {
     options.bpf_filter = "tcp";
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:i:f:vquh")) != -1) {
+    const option long_options[] = {{"json", required_argument, nullptr, 1000}, {nullptr, 0, nullptr, 0}};
+    while ((opt = getopt_long(argc, argv, "r:i:f:vquh", long_options, nullptr)) != -1) {
         switch (opt) {
+            case 1000:
+                if (!*optarg) {
+                    std::cerr << "Error: --json requires a nonempty output filename.\n";
+                    return 1;
+                }
+                options.json_filename = optarg;
+                break;
             case 'r':
                 options.read_filename = optarg;
                 break;

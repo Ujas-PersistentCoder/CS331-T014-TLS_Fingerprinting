@@ -2,75 +2,61 @@
 #define TLSFP_ACCUMULATOR_HPP
 
 #include "tlsfp/types.hpp"
-#include <array>
-#include <unordered_map>
+#include "tlsfp/ech_parser.hpp"
 #include <functional>
-#include <cstdint>
-#include <cstddef>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 #include <ctime>
 
 namespace tlsfp {
 
-/**
- * @brief Represents an in-flight fragmented TLS handshake segment accumulation.
- */
+// Only unfinished records allocate storage. Completed streams retain a sequence
+// watermark so retransmission after record delivery cannot produce another hello.
 struct FragmentedHandshake {
-    std::array<uint8_t, ACCUMULATOR_BUFFER_SIZE> buffer;
-    size_t total_expected{0};
-    size_t bytes_accumulated{0};
-    uint32_t base_seq{0};
+    std::vector<uint8_t> bytes;
+    size_t expected{0};
     time_t last_seen{0};
 };
 
-/**
- * @brief Two-Tier Stream Accumulator.
- * 
- * - Tier 1 (Fast Path): If packet contains the entire TLS record (>= 5 + record_len),
- *   it immediately invokes the completion callback zero-copy.
- * - Tier 2 (Slow Path): If packet is fragmented across MTUs (< 5 + record_len),
- *   it buffers contiguous or sequence-offset slices into an 8 KB scratchpad
- *   until complete, then invokes callback and evicts immediately.
- */
 class TwoTierAccumulator {
 public:
-    using HandshakeCallback = std::function<void(const FlowKey &key, 
-                                                 const uint8_t *record_data, 
-                                                 size_t record_len)>;
-    using RecordLimitCallback = std::function<void(const FlowKey &key)>;
+    // Callback bytes are borrowed only for the call (packet storage on the fast
+    // path, accumulation storage otherwise). Connection summaries must copy them.
+    using HandshakeCallback = std::function<void(const FlowKey &, const uint8_t *, size_t)>;
+    using RecordLimitCallback = std::function<void(const FlowKey &)>;
+    using IssueCallback = std::function<void(const FlowKey &, ParseStatus, const char *,
+                                             const uint8_t *, size_t)>;
 
-    explicit TwoTierAccumulator(HandshakeCallback callback, RecordLimitCallback limit_callback = {})
-        : on_handshake_ready_(std::move(callback)), on_record_limit_(std::move(limit_callback)) {}
+    explicit TwoTierAccumulator(HandshakeCallback ready, RecordLimitCallback limit = {},
+                                IssueCallback issue = {}, size_t max_streams = 2048)
+        : ready_(std::move(ready)), limit_(std::move(limit)), issue_(std::move(issue)),
+          max_streams_(max_streams) {}
 
-    /**
-     * @brief Ingest a raw TCP segment for a given 4-tuple flow.
-     * @param key 4-tuple identifying the flow
-     * @param seq TCP sequence number of segment
-     * @param payload Pointer to TCP payload bytes
-     * @param payload_len Length of TCP payload in bytes
-     * @param current_time Packet timestamp in seconds
-     */
-    void process_segment(const FlowKey &key,
-                         uint32_t seq,
-                         const uint8_t *payload,
-                         size_t payload_len,
-                         time_t current_time);
-
-    /**
-     * @brief Periodic garbage collection for incomplete or abandoned handshakes.
-     */
-    void cleanup_stale_flows(time_t current_time);
-
-    [[nodiscard]] size_t active_flow_count() const noexcept {
-        return active_flows_.size();
-    }
+    void process_segment(const FlowKey &, uint32_t seq, const uint8_t *, size_t, time_t);
+    void start_flow(const FlowKey &, uint32_t first_data_seq, time_t);
+    void stop_flow(const FlowKey &); // Call outside a record callback; frees any partial buffer.
+    void forget_flow(const FlowKey &);
+    void invalidate_flow(const FlowKey &, const char *reason, bool only_pending = false);
+    void cleanup_stale_flows(time_t);
+    void flush_pending(const char *reason);
+    [[nodiscard]] size_t active_flow_count() const noexcept;
 
 private:
-    HandshakeCallback on_handshake_ready_;
-    RecordLimitCallback on_record_limit_;
-    std::unordered_map<FlowKey, FragmentedHandshake, FlowHash> active_flows_;
-    uint64_t packet_counter_{0};
+    struct Stream {
+        uint32_t next_seq{0};
+        bool stopped{false};
+        bool tls_started{false};
+        bool syn_anchored{false};
+        std::optional<time_t> waiting_since;
+        std::unique_ptr<FragmentedHandshake> partial;
+    };
+    void report(const FlowKey &, Stream &, ParseStatus, const char *);
+    HandshakeCallback ready_;
+    RecordLimitCallback limit_;
+    IssueCallback issue_;
+    size_t max_streams_;
+    std::unordered_map<FlowKey, Stream, FlowHash> streams_;
 };
-
 } // namespace tlsfp
-
-#endif // TLSFP_ACCUMULATOR_HPP
+#endif

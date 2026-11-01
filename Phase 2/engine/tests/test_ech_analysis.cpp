@@ -8,6 +8,18 @@
 using namespace tlsfp;
 using namespace ech_fixture;
 
+TEST(EchAnalysisTest, I3RequiresCompleteCorrelatedNegativeEvidence) {
+    EchObservation observation;
+    observation.present = true;
+    EXPECT_TRUE(ech_non_acceptance_observed(observation, ParseStatus::Complete, ParseStatus::Complete, 0x0303));
+    EXPECT_FALSE(ech_non_acceptance_observed(observation, ParseStatus::Complete, ParseStatus::Complete, 0x0304));
+    EXPECT_FALSE(ech_non_acceptance_observed(observation, ParseStatus::Incomplete, ParseStatus::Complete, 0x0303));
+    EXPECT_FALSE(ech_non_acceptance_observed(observation, ParseStatus::Complete, ParseStatus::Malformed, 0x0303));
+    EXPECT_FALSE(ech_non_acceptance_observed(observation, ParseStatus::Complete, ParseStatus::Complete, 0x0200));
+    observation.present.reset();
+    EXPECT_FALSE(ech_non_acceptance_observed(observation, ParseStatus::Complete, ParseStatus::Complete, 0x0303));
+}
+
 TEST(EchAnalysisTest, FindingsCoexistAndDoNotOverwriteDecodedBodies) {
     Bytes extensions;
     extension(extensions, ECH_EXTENSION, outer(32, 1, 1, 0xffff));

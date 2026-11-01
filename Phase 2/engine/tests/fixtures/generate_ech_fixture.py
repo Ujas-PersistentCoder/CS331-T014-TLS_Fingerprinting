@@ -40,9 +40,13 @@ def checksum(data):
     return (~total) & 0xffff
 
 
-def packet(payload, port, sequence=1000):
+def packet(payload, port, sequence=1000, flags=0x18, server_direction=False):
     source, destination = bytes([192, 0, 2, 10]), bytes([198, 51, 100, 20])
-    tcp = struct.pack("!HHIIBBHHH", port, 443, sequence, 1, 0x50, 0x18, 65535, 0, 0)
+    source_port, destination_port = port, 443
+    if server_direction:
+        source, destination = destination, source
+        source_port, destination_port = destination_port, source_port
+    tcp = struct.pack("!HHIIBBHHH", source_port, destination_port, sequence, 1, 0x50, flags, 65535, 0, 0)
     pseudo = source + destination + b"\x00\x06" + u16(len(tcp) + len(payload))
     tcp = tcp[:16] + u16(checksum(pseudo + tcp + payload)) + tcp[18:]
     ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40 + len(payload), 1, 0x4000,

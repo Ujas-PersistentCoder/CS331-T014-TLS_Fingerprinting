@@ -40,6 +40,8 @@ struct ThreadLocalSha256Context {
 };
 
 inline const char* resolve_ja4_version(const ClientHelloData &client) noexcept {
+    // Describe the highest recognized offered version, not a negotiated result.
+    // supported_versions takes precedence over TLS 1.3's legacy_version 0x0303.
     if (!client.supported_versions.empty()) {
         bool has_13 = false, has_12 = false, has_11 = false, has_10 = false;
         for (uint16_t v : client.supported_versions) {
@@ -123,6 +125,8 @@ std::string sha256_hex_12(std::string_view input) {
 }
 
 JA4Fingerprint compute_ja4(const ClientHelloData &client) {
+    // With ECH these are visible outer-hello features; the SNI flag/ALPN cannot
+    // recover the private inner values. Keep the existing fingerprint definition.
     JA4Fingerprint fp;
 
     // 1. JA4_a (10 Characters: Protocol + Version + SNI-flag + CipherCount + ExtCount + ALPN)
@@ -161,6 +165,8 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
     fp.ja4_a.push_back(alpn_first);
     fp.ja4_a.push_back(alpn_last);
 
+    // Sort copies for JA4's order normalization, leaving parser wire order intact
+    // for JA3. ECH features are reported separately rather than added to the hash.
     // 2. JA4_b (Sorted Ciphers, 12 hex chars)
     if (client.cipher_suites.empty()) {
         fp.ja4_b = "000000000000";

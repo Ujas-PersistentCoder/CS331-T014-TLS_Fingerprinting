@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <algorithm>
 #include <vector>
 
 namespace ech_fixture {
@@ -15,6 +16,8 @@ inline void u16(Bytes &bytes, size_t value) {
 
 inline Bytes outer(size_t enc_length = 32, size_t payload_length = 208,
                    uint16_t kdf = 1, uint16_t aead = 1, uint8_t config = 139) {
+    // Fixed bytes exercise envelope lengths, not HPKE encryption. A successful
+    // parse of this fixture establishes neither a real offer nor ECH acceptance.
     Bytes body{0};
     u16(body, kdf);
     u16(body, aead);
@@ -46,6 +49,8 @@ inline void record_length(Bytes &record) {
 }
 
 inline void handshake_length(Bytes &record) {
+    // The handshake's uint24 length excludes its own 4-byte header; the record's
+    // uint16 length includes that handshake header but excludes the 5-byte record header.
     const size_t size = record.size() - 9;
     record[6] = static_cast<uint8_t>(size >> 16);
     record[7] = static_cast<uint8_t>(size >> 8);
@@ -67,6 +72,32 @@ inline Bytes with_ech(const Bytes &body = outer()) {
     Bytes extensions;
     extension(extensions, 0xfe0d, body);
     return hello(extensions);
+}
+
+inline Bytes client(bool ech = true, const Bytes &extra = {}) {
+    Bytes extensions;
+    extension(extensions, 43, {4, 3, 4, 3, 3}); // Offer TLS 1.3 and TLS 1.2.
+    if (ech) extension(extensions, 0xfe0d, outer());
+    extensions.insert(extensions.end(), extra.begin(), extra.end());
+    return hello(extensions);
+}
+
+inline Bytes server(uint16_t version = 0x0304, bool hrr = false, const Bytes &extra = {}) {
+    Bytes extensions;
+    if (version >= 0x0304) extension(extensions, 43, {static_cast<uint8_t>(version >> 8), static_cast<uint8_t>(version)});
+    extensions.insert(extensions.end(), extra.begin(), extra.end());
+    Bytes record{22, 3, 3, 0, 0, 2, 0, 0, 0, 3, 3};
+    record.insert(record.end(), 32, 0x42);
+    if (hrr) {
+        const Bytes random{0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
+                           0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c};
+        std::copy(random.begin(), random.end(), record.begin() + 11);
+    }
+    record.insert(record.end(), {0, 0x13, 1, 0}); // Empty session ID; selected cipher; null compression.
+    u16(record, extensions.size());
+    record.insert(record.end(), extensions.begin(), extensions.end());
+    handshake_length(record);
+    return record;
 }
 } // namespace ech_fixture
 #endif

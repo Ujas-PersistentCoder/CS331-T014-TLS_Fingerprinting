@@ -16,9 +16,14 @@ enum EchFinding : uint32_t {
 
 enum class HelloRole { Unknown, Initial, AfterHrr };
 
-// Our capture point is the external client-facing link. No role is guessed from
-// arrival order: checkpoint 1 has no bidirectional connection history.
+// Findings assume an external client-facing tap, where an inner marker is anomalous.
+// The caller supplies a role from connection history; a standalone parse has none.
 void analyze_ech(EchObservation &observation, HelloRole role = HelloRole::Unknown) noexcept;
+
+// I3 is negative evidence only. Callers must establish a consistent connection
+// and omit retry sequences whose analysis is outside this checkpoint.
+bool ech_non_acceptance_observed(const EchObservation &, ParseStatus client_status,
+                                 ParseStatus server_status, std::optional<uint16_t> version) noexcept;
 
 } // namespace tlsfp
 #endif
