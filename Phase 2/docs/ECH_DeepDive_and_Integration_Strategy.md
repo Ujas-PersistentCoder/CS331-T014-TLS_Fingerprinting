@@ -119,6 +119,15 @@ Clients without a usable `ECHConfig` **SHOULD** send a GREASE ECH extension (RFC
 - **Bot vs. Human Detection:** A browser-family TLS fingerprint identifies the underlying cryptographic library (e.g., BoringSSL), not human intent. Automated tools (Puppeteer, Playwright, undetected-chromedriver) drive genuine Chrome binaries and emit genuine browser handshakes.
 - **Post-Quantum Status:** Cloudflare’s published ECH HPKE KEM was classical X25519. Observing `kex=X25519MLKEM768` on a diagnostic trace page reflects the **TLS 1.3 handshake key exchange**, not the ECH HPKE wrapper.
 
+### 2.8 Cryptographic Downgrade & ECH Stripping Detection
+In adversarial or enterprise environments, active network intermediaries (e.g., inspection firewalls, MITM proxies) may attempt to bypass privacy protections by stripping or suppressing ECH:
+- **Active ECH Stripping:** A middlebox removes the `0xfe0d` extension in transit. If the client runs in *opportunistic mode*, it may complete the handshake using the unencrypted `ClientHelloOuter`, inadvertently disclosing the SNI. If the client runs in *strict ECH mode*, the server aborts the handshake with `ech_required`.
+- **Observable Downgrade Indicators:**
+  - `REJECTED_OR_IGNORED_TLS12_NEGOTIATED`: Client offered `0xfe0d`, but the server negotiated TLS 1.2 or earlier, dropping ECH entirely.
+  - `REJECTED_HRR_WITHOUT_ECH`: Server issued a `HelloRetryRequest` omitting extension `0xfe0d`, proving non-acceptance (RFC 9849 §6.1.4).
+  - `ECH_STRIPPED_SUSPECTED`: A client session initiates with an outer SNI known to mandate ECH (or previously observed using ECH), but omits extension `0xfe0d` entirely.
+- **Evidence Contract Boundary:** Passive observers cannot verify why ECH failed (e.g., whether caused by an active MITM proxy, a stale DNS RR, or intentional enterprise policy). The engine objectively records the wire outcome (`NON_ACCEPTANCE_TLS12` or `NON_ACCEPTANCE_HRR_NO_ECH`) without attributing definitive adversary intent unless corroborated by external policy telemetry.
+
 ---
 
 ## 3. Engine Architecture & Integration in `Phase 2/engine`
@@ -382,16 +391,35 @@ Every output field displayed by the engine maps strictly to an authoritative wir
 | **`inferred_kem`** | Ext `enc_len` | KEM algorithm consistent with the observed ephemeral key length. | `Unknown`; explicitly labeled as inferred. |
 | **`acceptance`** | ServerHello / HRR / Keys | Non-acceptance observed (I3) or verified via lab keylog oracle. | `UNVERIFIED` to passive tap for standard TLS 1.3 completions. |
 | **`offer_type`** | Rules I1, I2, I4, I5 | Inferred hypothesis with named supporting evidence rule. | `UNKNOWN` (rules fired: none) |
+| **`downgrade_detected`** | Handshake correlation | `REJECTED_OR_IGNORED_TLS12` or `REJECTED_HRR_WITHOUT_ECH` after ECH offer. | `NONE` (normal TLS 1.3 completion or unobserved server flight). |
+| **`padding_anomaly`** | Ciphertext arithmetic check | $\text{ciphertext\_len} \pmod{32} \not\equiv 16$ indicating non-standard inner padding. | Valid RFC 9849 §6.1.3 padding invariant. |
+| **`tcp_flight_metrics`** | Accumulator telemetry | Segment count, payload bytes, and MSS boundary splits for the ClientHello. | Incomplete TCP stream or unreassembled fragments. |
 
 ---
 
 ## 5. Transport Layer Reality: Stream Accumulation for ECH
 
+### 5.1 Real-World Handshake Size Explosion
 A vital finding from real-world network captures is that **ECH ClientHellos frequently exceed single-packet Ethernet MTUs**:
 - In Chrome 124–130, `X25519Kyber768Draft00` (1216B key share) was enabled; starting in Chrome 131, `X25519MLKEM768` (1216B key share) is standard.
 - The hybrid post-quantum key share alone takes ~1.2 KB. The ECH extension adds an additional **350–450 bytes** of ephemeral public keys and ciphertext.
 - Total handshake length reaches **roughly 2.0 KB to 2.8 KB**, causing ECH-bearing handshakes to span **2 TCP packets** under standard MTU (1500 bytes, MSS ~1448 bytes).
-- **The Engine's Two-Tier Accumulator:** This transport reality validates our Milestone 1 **Two-Tier Accumulator (8 KB bounded buffer)**. Naive single-packet sniffers fail or truncate on modern ECH handshakes; our engine reassembles them cleanly.
+- **The Engine's Two-Tier Accumulator:** This transport reality validates our Milestone 1 **Two-Tier Accumulator (8 KB bounded buffer)**. Naive single-packet sniffers fail or truncate on modern ECH handshakes; our engine reassembles them cleanly with zero steady-state heap allocations.
+
+### 5.2 Transport Flight Accounting & Segmentation Profiling
+By tracking the physical delivery of ECH-bearing ClientHellos at Layer 4, the engine correlates transport mechanics with TLS security:
+- **Segment Flight Count:** Records the physical number of TCP packets required to deliver the outer handshake (typically 2 segments under standard 1,500-byte MTU, or 1 jumbo segment under Linux GRO/LRO).
+- **MSS Boundary Slicing:** Verifies whether segments are partitioned cleanly at the standard 1,448-byte TCP MSS boundary. Unusual fragment offsets or micro-segments highlight proxy buffering or traffic shaping.
+- **Header Buffering Diagnostics:** Validates whether the 5-byte TLS record header arrived split across segment boundaries, testing the engine's partial header buffer.
+
+### 5.3 Strict Wire Validation & Malformed Anomaly Telemetry
+The engine upgrades ECH parsing into a hardened, fuzzer-resistant protocol validation layer:
+- **Padding Invariant Verification (RFC 9849 §6.1.3):** Because AEAD ciphers in ECH (AES-128-GCM, ChaCha20-Poly1305) produce a 16-byte authentication tag and the inner hello is padded to a multiple of 32 bytes, the outer ciphertext length must strictly satisfy:
+  $$\text{ciphertext\_len} \pmod{32} \equiv 16$$
+  Any deviation is flagged as an `ECH_PADDING_ANOMALY`, detecting non-standard padding implementations or packet tampering.
+- **Duplicate Extension Guard (RFC 8446 §4.2):** Multiple occurrences of `0xfe0d` are flagged as `EchParse::DUPLICATE`, preventing extension collision attacks.
+- **Cleartext Outer Anomaly (RFC 9849 §5.1):** Cleartext presence of `0xfd00` (`ech_outer_extensions`) in the outer ClientHello is flagged as `EchParse::ANOMALY_FD00_IN_OUTER`.
+- **Zero-Allocation Safety:** Strict bounds checking via `ByteReader` guarantees that truncated or corrupted payloads cannot cause out-of-bounds memory accesses.
 
 ---
 
@@ -460,6 +488,12 @@ To ensure 100% reproducibility for project evaluation:
 
 - **Q: "How does the outer extension identify the KEM algorithm?"**  
   *A: "It does not identify it directly. The outer extension carries only kdf_id, aead_id, config_id, enc, and payload. The kem_id lives in the ECHConfig distributed via DNS (RFC 9848). Identifying DHKEM-X25519 from enc_len = 32 is an inference based on current deployment profiles, and our engine explicitly labels it as inferred."*
+
+- **Q: "How can the engine detect ECH downgrade or stripping attempts?"**  
+  *A: "When an active MITM proxy strips extension 0xfe0d, or when a server drops ECH, the engine tracks handshake symmetry: if a client offers 0xfe0d and the server negotiates TLS 1.2 or issues an HRR omitting 0xfe0d, non-acceptance is proven. When historical telemetry is available, observing a known-ECH domain suddenly running unencrypted SNI flags an anomalous downgrade."*
+
+- **Q: "Why does the engine validate the ciphertext padding invariant?"**  
+  *A: "RFC 9849 §6.1.3 mandates that inner ClientHellos be padded to a multiple of 32 bytes. Combined with the 16-byte AEAD authentication tag, valid ECH ciphertexts must strictly satisfy ciphertext_len mod 32 == 16. Checking this invariant allows our engine to detect malformed packets, corrupted captures, or non-compliant client stacks."*
 
 ---
 

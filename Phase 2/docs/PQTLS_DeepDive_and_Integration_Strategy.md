@@ -143,12 +143,14 @@ While JA4 provides an exceptionally stable fingerprint across browser updates by
 - A connection secured with classical X25519 (vulnerable to future quantum decryption) and a connection secured with hybrid X25519MLKEM768 produce identical JA4 hashes.
 - **Engine Upgrade:** Our engine extracts and reports the advertised groups, top preference, and key share dimensions as an orthogonal metadata layer. Operators obtain both the stable client identity (via JA4) and the cryptographic security posture (via PQ telemetry) in a single unified output.
 
-### 5.2 Connection Security Inventory & Negotiation Telemetry
-Passive fingerprinting engines traditionally inspect only the ClientHello. PQ-TLS integration extends our engine across both directions of the handshake:
-- **Client Intent:** Did the client offer post-quantum capability (`PROACTIVE_SHARE_VALID` vs. `SUPPORTED_ONLY`)?
-- **Negotiated Outcome:** Did the server agree to hybrid key exchange (`HYBRID_SELECTED_OBSERVED`), or did the connection fall back to classical curves (`CLASSICAL_SELECTED_AFTER_HYBRID_OFFER`)?
-- **Renegotiation Detection:** Did the server issue a `HelloRetryRequest` (`HRR_REQUESTED_RETRY`) to request a key share that the client supported but did not proactively transmit?
-- This allows enterprise auditors to measure true quantum-readiness across network segments rather than assuming client capabilities equate to established security.
+### 5.2 Cryptographic Downgrade & Stripping Detection
+Passive fingerprinting engines traditionally inspect only the ClientHello. PQ-TLS integration extends our engine across both directions of the handshake, introducing bidirectional **Handshake Symmetry Analysis**:
+- **Client Preference vs. Server Selection:** The engine inspects whether the client designated a hybrid group (`0x11ec` / `0x11eb`) as its primary preference (first entry in `supported_groups`) and proactively supplied its 1.2 KB share.
+- **Negotiation Telemetry:**
+  - `HYBRID_SELECTED_OBSERVED`: Server selected `0x11ec` from the proactive share in 1 RTT (quantum-safe forward secrecy achieved).
+  - `CLASSICAL_SELECTED_AFTER_HYBRID_OFFER`: Client explicitly offered hybrid PQC, but the server negotiated a classical curve (e.g., `0x001d` X25519 or `0x0017` secp256r1) or downgraded to TLS 1.2.
+  - `HRR_REQUESTED_RETRY`: Server requested a hybrid key share via `HelloRetryRequest` because the client supported `0x11ec` but did not provide a proactive share.
+- **Downgrade vs. Benign Fallback:** A classical selection is mathematically distinct from an active attack—most legacy servers simply do not yet support RFC 10024. However, by maintaining an optional endpoint cache, the engine can flag **anomalous cryptographic regression**: when a domain known to negotiate hybrid PQC suddenly negotiates classical X25519 or TLS 1.2, alerting security operators to potential active Man-in-the-Middle (MitM) key stripping.
 
 ### 5.3 Proactive vs. Reactive Negotiation Analysis
 Clients navigate a bandwidth-versus-latency tradeoff when offering post-quantum keys:
@@ -164,7 +166,25 @@ In classical TLS 1.3, the vast majority of ClientHellos fit inside a single 1500
 ### 5.5 Multi-Layer Profile Consistency
 Rather than claiming to be an infallible "bot detector" (since Go 1.24+ and modern automated toolchains natively support `0x11ec`), our engine uses PQ telemetry as part of an objective **Profile Consistency Framework**:
 - Cross-references Layer 4 transport metrics (JA4T: TCP window size, MSS, scale factor) with Layer 6 TLS capabilities (PQC group preferences, extension order).
-- Flags cryptographic anomalies: for example, a ClientHello advertising `0x11ec` whose `key_share` vector length does not match the strict 1,216-byte RFC 10024 boundary is flagged as `SHARE_MALFORMED`.
+- Correlates client-advertised capabilities with typical operating system network stacks to flag implementation discrepancies.
+
+### 5.6 Strict RFC Wire Validation & Malformed Share Anomaly Telemetry
+A critical vulnerability in passive network monitors is crashing or buffer-overflowing when encountering fuzzed, corrupted, or malicious handshake packets. The engine upgrades wire parsing into an active **protocol validation and intrusion detection layer**:
+- **Direction-Specific Length Invariants (RFC 10024 §3):**
+  - For client shares: `0x11ec` MUST be exactly 1,216 bytes; `0x11eb` MUST be exactly 1,249 bytes; `0x11ed` MUST be exactly 1,665 bytes.
+  - For server shares: `0x11ec` MUST be exactly 1,120 bytes; `0x11eb` MUST be exactly 1,153 bytes.
+  - If a packet advertises group `0x11ec` but `key_exchange_len != 1216`, the engine immediately flags `PQC_MALFORMED_SHARE_LENGTH` and safely terminates parsing without attempting out-of-bounds reads.
+- **Duplicate Extension Guards (RFC 8446 §4.2):** RFC 8446 forbids multiple occurrences of any extension type. If an attacker injects multiple `0x0033` (key_share) or `0x000a` (supported_groups) extensions to cause parser desynchronization, the engine halts further extension processing and records `PQC_DUPLICATE_EXTENSION_ANOMALY`.
+- **Zero-Allocation Safety:** Parsing runs through strict, bounds-checked span readers (`ByteReader`). Vector lengths and remaining buffer bytes are verified before every single byte read.
+
+### 5.7 Transport-Layer Profiling: TCP Segmentation & Flight Correlation
+Post-quantum handshakes span Layer 4 (Transport) and Layer 7 (Application) in ways classical TLS never did. The engine leverages this physical reality to create a new dimension of **Transport Flight Telemetry**:
+- **Flight Segment Accounting:** The Two-Tier Accumulator instruments and logs the exact physical packet flight required to assemble the ClientHello:
+  - `tcp_segment_count`: Number of TCP segments assembled (typically 1 for classical, 2 for hybrid PQC under standard MTU).
+  - `tcp_payload_bytes`: Total wire bytes accumulated across segments before record completion.
+  - `tcp_mss_clamped`: Whether segments were sliced cleanly at the standard 1,448-byte TCP MSS boundary.
+- **GRO / LRO Kernel Offload Telemetry:** Distinguishes between handshakes assembled across distinct physical Ethernet frames versus "jumbo" frames reassembled in kernel-space via Large Receive Offload (LRO) or Generic Receive Offload (GRO).
+- **Out-of-Order & Loss Metrics:** Tracks whether the initial 5-byte TLS record header arrived in segment 1 or was delayed/reordered, providing empirical network health indicators directly alongside TLS fingerprints.
 
 ---
 
@@ -179,6 +199,9 @@ Every output field displayed by the engine maps strictly to an authoritative wir
 | **`key_share_len == 1216`** | Ext `0x0033` vector | Length matches RFC 10024 client share size. | Validly framed hybrid share vector. | Length mismatch $\rightarrow$ flag `MALFORMED_SHARE`. |
 | **`server_selected_group`** | ServerHello ext `0x0033` | Server selected a specific group for this session. | Cryptographic key exchange group negotiated. | Server omitted `key_share` or sent HRR. |
 | **`connection_posture`** | Handshake correlation | `HYBRID_SELECTED_OBSERVED` vs. `CLASSICAL_SELECTED_AFTER_HYBRID_OFFER`. | Whether the server agreed to hybrid key exchange. | Session incomplete, truncated, or unobserved server flight. |
+| **`malformed_share_anomaly`** | Vector length check | `key_exchange_len` does not match RFC 10024 invariant (e.g. $\neq 1216$ for `0x11ec`). | Packet corruption, fuzzer probe, or non-compliant client implementation. | Valid vector dimensions. |
+| **`duplicate_ext_anomaly`** | Extension parser pass | Same extension ID seen $> 1$ time in one hello. | Direct RFC 8446 §4.2 protocol violation / injection anomaly. | All extension IDs unique. |
+| **`tcp_flight_segments`** | Accumulator telemetry | Physical TCP segment count and accumulated payload bytes for ClientHello. | Layer 4 transport segmentation behavior across standard MTU/MSS boundaries. | Incomplete TCP stream or unreassembled fragments. |
 
 ---
 
@@ -204,6 +227,12 @@ Every output field displayed by the engine maps strictly to an authoritative wir
 
 - **Q: "Why is the server key share smaller than the client key share?"**  
   *A: "In RFC 10024 §3, the client share carries the ML-KEM-768 public key (1,184 bytes) plus the 32-byte X25519 public key (1,216 bytes). The server share carries the ML-KEM-768 ciphertext (1,088 bytes) plus its 32-byte X25519 public key, totaling 1,120 bytes."*
+
+- **Q: "How does the engine distinguish a normal classical server from a post-quantum downgrade attack?"**  
+  *A: "Passive inspection cannot cryptographically prove attack intent because an uncompromised server that lacks RFC 10024 support behaves identically to a server subjected to an active stripping proxy. Our engine adheres to the Evidence Contract: it objectively reports CLASSICAL_SELECTED_AFTER_HYBRID_OFFER. When historical endpoint telemetry is enabled, persistent regression on known-PQC endpoints is elevated to an anomaly alert for SOC operators."*
+
+- **Q: "Why does the engine measure TCP segments when fingerprinting happens at the TLS layer?"**  
+  *A: "Post-quantum keys physically change the transport characteristics of TLS. Because hybrid shares push ClientHellos beyond the standard 1,448-byte MSS, transport segmentation is no longer an anomaly—it is standard behavior. Instrumenting segment counts and reassembly buffer usage directly connects Layer 4 network reality with Layer 7 cryptographic security."*
 
 - **Q: "What if a client lists 0x11ec in supported_groups but sends no initial key share?"**  
   *A: "TLS 1.3 allows clients to advertise group support without supplying a proactive key share. This is common in bandwidth-constrained clients. If the server selects that group, it issues a HelloRetryRequest (HRR) requesting the share. Our engine tracks this cleanly as SUPPORTED_ONLY."*
