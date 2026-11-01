@@ -111,6 +111,12 @@ void parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
                 break;
             }
 
+            // Extension 0x0033: Key Share (PQ-TLS code is in pqtls_parser.cpp)
+            case 0x0033: {
+                parse_pqtls_client_key_share(reader, out.pqtls);
+                break;
+            }
+
             // Extension 0x002b: Supported Versions (TLS 1.3)
             case 0x002b: {
                 uint8_t versions_len = 0;
@@ -151,6 +157,12 @@ void parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
         }
 
         switch (ext_type) {
+            // Extension 0x0033: Key Share (PQ-TLS code is in pqtls_parser.cpp)
+            case 0x0033: {
+                parse_pqtls_server_key_share(reader, out.pqtls);
+                break;
+            }
+
             // Extension 0x002b: Supported Versions in ServerHello is exactly 2 bytes
             case 0x002b: {
                 if (ext_len >= 2) {
@@ -260,6 +272,9 @@ bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloDat
         }
     }
 
+    // 9. PQ-TLS check, after ALL extensions are read (code is in pqtls_parser.cpp)
+    find_pqtls_group(out.supported_groups, out.pqtls);
+
     return true;
 }
 
@@ -296,8 +311,10 @@ bool parse_server_hello(const uint8_t *record, size_t record_len, ServerHelloDat
     // 3. Server Version (2 bytes)
     if (!hs_reader.read_u16_be(out.server_version)) return false;
 
-    // 4. Random (32 bytes)
-    if (!hs_reader.skip(32)) return false;
+    // 4. Random (32 bytes). Read (not skipped) so PQ-TLS can spot a HelloRetryRequest.
+    const uint8_t *random = nullptr;
+    if (!hs_reader.read_bytes(32, random)) return false;
+    out.pqtls.is_hrr = is_hrr_random(random);
 
     // 5. Session ID
     uint8_t session_id_len = 0;

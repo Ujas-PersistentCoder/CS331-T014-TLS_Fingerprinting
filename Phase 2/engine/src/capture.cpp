@@ -3,6 +3,7 @@
 #include "tlsfp/ja3.hpp"
 #include "tlsfp/ja4.hpp"
 #include "tlsfp/db.hpp"
+#include "tlsfp/pqtls_analysis.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -12,6 +13,7 @@
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <filesystem>
+#include <unordered_map>
 
 namespace tlsfp {
 
@@ -135,12 +137,53 @@ void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s,
               << Color::DIM << "c: [" << ja4s.raw_ja4_c << "]" << Color::RESET << "\n";
 }
 
+// ---------- PQ-TLS output (verbose mode) ----------
+
+void print_pqtls_client(const ClientHelloData &ch, PqtlsShareMode mode) {
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Offer]  " << Color::RESET
+              << (ch.pqtls.pq_group != 0 ? Color::MAGENTA : Color::GRAY)
+              << pqtls_offer_text(ch.pqtls) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Keys]   " << Color::RESET
+              << pqtls_keys_text(ch.pqtls) << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Share]  " << Color::RESET
+              << (mode == PqtlsShareMode::PROACTIVE_SHARE_VALID ? Color::GREEN : Color::YELLOW)
+              << pqtls_share_mode_name(mode) << Color::RESET << "\n";
+}
+
+void print_pqtls_server(const ServerHelloData &sh, PqtlsPosture posture) {
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Group]  " << Color::RESET
+              << (is_pqtls_group(sh.pqtls.selected_group) ? Color::MAGENTA : Color::GRAY)
+              << pqtls_server_text(sh.pqtls) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Result] " << Color::RESET
+              << (posture == PqtlsPosture::HYBRID_SELECTED_OBSERVED ? Color::GREEN : Color::YELLOW)
+              << pqtls_posture_name(posture) << Color::RESET << "\n";
+}
+
+// The same connection seen from the other side: swap source and destination.
+FlowKey reverse_key(const FlowKey &key) {
+    FlowKey r = key;
+    r.src_ip = key.dst_ip;
+    r.dst_ip = key.src_ip;
+    r.src_port = key.dst_port;
+    r.dst_port = key.src_port;
+    return r;
+}
+
 } // anonymous namespace
 
 struct CaptureEngine::Impl {
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
     std::unique_ptr<FingerprintDatabase> db;
+
+    // PQ-TLS: the client's offer for each connection, kept until the server answers.
+    // Key = the client -> server direction of the connection.
+    std::unordered_map<FlowKey, PqtlsOffer, FlowHash> pqtls_offers;
 
     std::string resolve_label(FingerprintKind kind, const std::string &hash, bool prompt_unknown) {
         if (!db) return "<unknown>";
@@ -420,6 +463,20 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
     if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
         if (parse_client_hello(record_data, record_len, impl_->client_scratchpad)) {
             stats_.client_hellos++;
+
+            // PQ-TLS: was this connection's previous hello answered with an HRR?
+            // Then this is the second hello, and its keys follow the server's request.
+            bool after_hrr = false;
+            auto prev = impl_->pqtls_offers.find(key);
+            if (prev != impl_->pqtls_offers.end() && prev->second.hrr_seen) {
+                after_hrr = true;
+            }
+            PqtlsShareMode share_mode = pqtls_share_mode(impl_->client_scratchpad.pqtls, after_hrr);
+
+            // PQ-TLS: remember the offer so we can compare it with the server's answer.
+            // If the client sends a second hello (after an HRR), this overwrites the first.
+            impl_->pqtls_offers[key] = make_pqtls_offer(impl_->client_scratchpad.pqtls);
+
             JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
 
@@ -454,6 +511,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
 
             if (options_.verbose) {
                 print_verbose_client(impl_->client_scratchpad, ja3, ja4);
+                print_pqtls_client(impl_->client_scratchpad, share_mode);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
@@ -462,6 +520,26 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {
             stats_.server_hellos++;
+
+            // PQ-TLS: find the client's offer. The server's packets go server -> client,
+            // so we look it up with the reversed key.
+            PqtlsOffer offer;  // seen = false if we never saw the ClientHello
+            auto it = impl_->pqtls_offers.find(reverse_key(key));
+            if (it != impl_->pqtls_offers.end()) {
+                offer = it->second;
+            }
+            PqtlsPosture posture = pqtls_posture(offer, impl_->server_scratchpad.pqtls);
+
+            // After a normal ServerHello the negotiation is over, so forget the offer.
+            // After an HRR we keep it (and mark it): a second ClientHello and ServerHello will follow.
+            if (it != impl_->pqtls_offers.end()) {
+                if (impl_->server_scratchpad.pqtls.is_hrr) {
+                    it->second.hrr_seen = true;
+                } else {
+                    impl_->pqtls_offers.erase(it);
+                }
+            }
+
             JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
 
@@ -496,6 +574,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
 
             if (options_.verbose) {
                 print_verbose_server(impl_->server_scratchpad, ja3s, ja4s);
+                print_pqtls_server(impl_->server_scratchpad, posture);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;

@@ -36,6 +36,8 @@ add_library(tlsfp_phase2_lib STATIC
     src/ja3.cpp
     src/ja4.cpp
     src/db.cpp
+    src/pqtls_parser.cpp
+    src/pqtls_analysis.cpp
 )
 
 target_include_directories(tlsfp_phase2_lib
@@ -82,7 +84,11 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-add_executable(unit_tests tests/test_fingerprints.cpp)
+add_executable(unit_tests
+    tests/test_fingerprints.cpp
+    tests/test_pqtls_parser.cpp
+    tests/test_pqtls_analysis.cpp
+)
 target_link_libraries(unit_tests PRIVATE tlsfp_phase2_lib gtest gtest_main)
 
 include(GoogleTest)

@@ -3,6 +3,7 @@
 
 #include "tlsfp/types.hpp"
 #include "tlsfp/byte_reader.hpp"
+#include "tlsfp/pqtls_parser.hpp"
 #include <cstdint>
 #include <vector>
 #include <string_view>
@@ -39,6 +40,8 @@ struct ClientHelloData {
     std::string_view sni;        // Zero-copy view into packet buffer
     std::string_view first_alpn; // First non-GREASE ALPN protocol
 
+    PqtlsClientObservation pqtls; // PQ-TLS key exchange facts (see pqtls_parser.hpp)
+
     void clear() noexcept {
         client_version = 0;
         cipher_suites.clear();
@@ -50,6 +53,7 @@ struct ClientHelloData {
         has_sni = false;
         sni = {};
         first_alpn = {};
+        pqtls.clear();
     }
 };
 
@@ -63,12 +67,15 @@ struct ServerHelloData {
     std::vector<uint16_t> extensions;
     std::string_view first_alpn;
 
+    PqtlsServerObservation pqtls; // PQ-TLS key exchange facts (see pqtls_parser.hpp)
+
     void clear() noexcept {
         server_version = 0;
         selected_version = 0;
         selected_cipher = 0;
         extensions.clear();
         first_alpn = {};
+        pqtls.clear();
     }
 };
 
