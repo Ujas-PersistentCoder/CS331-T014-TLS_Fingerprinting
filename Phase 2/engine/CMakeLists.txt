@@ -10,12 +10,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose build type" FORCE)
 endif()
 
-# Dependencies
-find_path(PCAP_INCLUDE_DIR NAMES pcap.h)
-find_library(PCAP_LIBRARY NAMES pcap wpcap)
+# 1. OS-Agnostic Packet Capture Dependency
+find_path(PCAP_INCLUDE_DIR NAMES pcap.h PATH_SUFFIXES pcap include)
+find_library(PCAP_LIBRARY NAMES pcap wpcap Packet)
 
 if(NOT PCAP_LIBRARY OR NOT PCAP_INCLUDE_DIR)
-    message(FATAL_ERROR "libpcap development files (pcap.h, libpcap.so/a) not found.")
+    message(FATAL_ERROR "libpcap / Npcap development files (pcap.h, libpcap.so/dylib/a or wpcap.lib) not found.")
 endif()
 
 add_library(pcap::pcap UNKNOWN IMPORTED)
@@ -24,10 +24,11 @@ set_target_properties(pcap::pcap PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${PCAP_INCLUDE_DIR}"
 )
 
+# 2. Cryptographic and Socket Dependencies
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
-# Static Library Target
+# 3. Static Library Target
 add_library(tlsfp_phase2_lib STATIC
     src/accumulator.cpp
     src/capture.cpp
@@ -41,6 +42,7 @@ target_include_directories(tlsfp_phase2_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${PCAP_INCLUDE_DIR}
+        ${OPENSSL_INCLUDE_DIR}
 )
 
 target_link_libraries(tlsfp_phase2_lib
@@ -50,51 +52,38 @@ target_link_libraries(tlsfp_phase2_lib
         Threads::Threads
 )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+# Link Windows Socket API library when compiling on Windows
+if(WIN32)
+    target_link_libraries(tlsfp_phase2_lib PUBLIC ws2_32)
+endif()
+
+# 4. OS-Agnostic Compiler Flags
+if(MSVC)
+    target_compile_options(tlsfp_phase2_lib PRIVATE /W4 /O2)
+else()
     target_compile_options(tlsfp_phase2_lib PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
+        -Wall -Wextra -Wpedantic
         $<$<CONFIG:Release>:-O3>
-        $<$<CONFIG:Release>:-march=native>
         $<$<CONFIG:Debug>:-g3>
-        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
-    )
-    target_link_options(tlsfp_phase2_lib PRIVATE
-        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
 endif()
 
-# CLI Executable
-add_executable(tlsfp_phase2
-    src/main.cpp
-)
+# 5. CLI Executable
+add_executable(tlsfp_phase2 src/main.cpp)
+target_link_libraries(tlsfp_phase2 PRIVATE tlsfp_phase2_lib)
 
-target_link_libraries(tlsfp_phase2
-    PRIVATE
-        tlsfp_phase2_lib
-)
-
-# Enable Testing and GoogleTest
+# 6. Cross-Platform Unit Testing Setup (FetchContent requires zero system GTest setup)
 enable_testing()
-find_package(GTest REQUIRED)
-
-# Test Executable Target
-add_executable(unit_tests
-    tests/test_fingerprints.cpp
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
 )
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
 
-target_link_libraries(unit_tests
-    PRIVATE
-        tlsfp_phase2_lib
-        GTest::gtest
-        GTest::gtest_main
-)
-
-# OS-Agnostic RPATH: Automatically embed runtime search paths of linked targets
-set_target_properties(unit_tests PROPERTIES
-    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest_main>;$<TARGET_FILE_DIR:GTest::gtest>"
-)
+add_executable(unit_tests tests/test_fingerprints.cpp)
+target_link_libraries(unit_tests PRIVATE tlsfp_phase2_lib gtest gtest_main)
 
 include(GoogleTest)
 gtest_discover_tests(unit_tests)

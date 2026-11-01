@@ -674,3 +674,132 @@ TEST(TLSParserTest, ParsesClientHelloWhenPipelinedWithSecondRecord) {
     EXPECT_TRUE(success);
     EXPECT_EQ(client_data.cipher_suites, std::vector<uint16_t>({0x1301}));
 }
+#include "tlsfp/ja4.hpp"
+
+// ============================================================
+// JA4 & JA4S FINGERPRINT SPECIFICATION TESTS
+// ============================================================
+
+TEST(JA4Test, CanonicalJA4StringGeneration) {
+    ClientHelloData client{};
+    client.client_version = 0x0303;        // TLS 1.2
+    client.supported_versions = {0x0304}; // TLS 1.3 negotiated via extension
+    client.first_alpn = "h2";
+    client.has_sni = true;
+    client.sni = "example.com";
+    client.cipher_suites = {0x1301, 0x1302, 0x1303, 0xc02b};
+    client.extensions = {0x0000, 0x0010, 0x002b, 0x000d};
+    client.signature_algorithms = {0x0403, 0x0804};
+
+    JA4Fingerprint ja4 = compute_ja4(client);
+
+    EXPECT_EQ(ja4.ja4_a.substr(0, 3), "t13");
+    EXPECT_EQ(ja4.ja4_a[3], 'd');          // SNI flag at index 3
+    EXPECT_EQ(ja4.ja4_a.back(), '2');      // End of ALPN 'h2' at index 9
+    EXPECT_FALSE(ja4.full_fp.empty());
+    EXPECT_EQ(ja4.full_fp.length(), 36u) << "JA4 full fingerprint must be exactly 36 characters";
+}
+
+TEST(JA4STest, CanonicalJA4SStringGeneration) {
+    ServerHelloData server{};
+    server.server_version = 0x0303;
+    server.selected_version = 0x0304; // Negotiated TLS 1.3
+    server.selected_cipher = 0x1301;
+    server.extensions = {0x002b, 0x0033};
+    server.first_alpn = "h2";
+
+    JA4Fingerprint ja4s = compute_ja4s(server);
+
+    EXPECT_FALSE(ja4s.full_fp.empty());
+    EXPECT_EQ(ja4s.full_fp.length(), 25u) << "JA4S full fingerprint must be exactly 25 characters (7 + 1 + 4 + 1 + 12)";
+}
+
+// ============================================================
+// MIDDLEBOX & LAYER 4 KERNEL ANOMALY TESTS
+// ============================================================
+
+TEST(TLSParserTest, DetectsAndStripsMiddleboxCCSHeader) {
+    std::vector<uint8_t> ccs_header = {0x14, 0x03, 0x03, 0x00, 0x01, 0x01};
+    auto ch_record = build_client_hello_record({0x1301}, {});
+
+    std::vector<uint8_t> payload = ccs_header;
+    payload.insert(payload.end(), ch_record.begin(), ch_record.end());
+
+    size_t offset = 0;
+    if (payload.size() >= 6 &&
+        payload[0] == 0x14 && payload[1] == 0x03 && payload[2] == 0x03 &&
+        payload[3] == 0x00 && payload[4] == 0x01 && payload[5] == 0x01) {
+        offset = 6;
+    }
+
+    EXPECT_EQ(offset, 6u);
+
+    ClientHelloData client{};
+    bool success = parse_client_hello(payload.data() + offset, payload.size() - offset, client);
+    EXPECT_TRUE(success);
+    EXPECT_EQ(client.cipher_suites, std::vector<uint16_t>({0x1301}));
+}
+
+TEST(LinkLayerDemuxTest, HandlesQinQDoubleVlanTaggedEthernet) {
+    // Ethernet (14 B) + Outer 802.1ad (4 B) + Inner 802.1Q (4 B) = 22 B total link header
+    std::vector<uint8_t> packet = {
+        // Ethernet Destination & Source MACs
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+        // Outer 802.1ad QinQ Tag Type (0x88A8) + Outer VLAN ID 200 (0x00C8)
+        0x88, 0xA8, 0x00, 0xC8,
+        // Inner 802.1Q Tag Type (0x8100) + Inner VLAN ID 100 (0x0064)
+        0x81, 0x00, 0x00, 0x64,
+        // Inner Protocol: IPv4 (0x0800)
+        0x08, 0x00
+    };
+
+    size_t link_hdr_len = 14;
+    uint16_t ethertype = (static_cast<uint16_t>(packet[12]) << 8) | packet[13];
+
+    if (ethertype == 0x8100 || ethertype == 0x88A8) {
+        link_hdr_len = 18;
+        ethertype = (static_cast<uint16_t>(packet[16]) << 8) | packet[17];
+        while ((ethertype == 0x8100 || ethertype == 0x88A8) && packet.size() >= link_hdr_len + 4) {
+            ethertype = (static_cast<uint16_t>(packet[link_hdr_len + 2]) << 8) | packet[link_hdr_len + 3];
+            link_hdr_len += 4;
+        }
+    }
+
+    EXPECT_EQ(link_hdr_len, 22u);
+    EXPECT_EQ(ethertype, 0x0800);
+}
+
+TEST_F(AccumulatorTest, Tier2_HandlesTCPSequenceNumberRollover) {
+    auto tls_record = build_client_hello_record({0x1301}, std::vector<uint8_t>(400, 0xCC));
+    
+    size_t split = 200;
+    std::vector<uint8_t> seg1(tls_record.begin(), tls_record.begin() + split);
+    std::vector<uint8_t> seg2(tls_record.begin() + split, tls_record.end());
+
+    // Sequence number set near 32-bit unsigned boundary (0xFFFFFFF0)
+    uint32_t base_seq = 0xFFFFFFF0;
+
+    accum.process_segment(test_key, base_seq, seg1.data(), seg1.size(), 100000);
+    EXPECT_EQ(accum.active_flow_count(), 1u);
+
+    // Segment 2 sequence wraps around uint32_t ceiling to 0x000000B8
+    uint32_t seg2_seq = base_seq + static_cast<uint32_t>(split);
+
+    accum.process_segment(test_key, seg2_seq, seg2.data(), seg2.size(), 100001);
+
+    ASSERT_EQ(received_records.size(), 1u);
+    EXPECT_EQ(received_records[0], tls_record);
+    EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
+// ============================================================
+// PARSER HARSHNESS & FUZZING RESILIENCE TESTS
+// ============================================================
+
+TEST(TLSParserTest, RejectsTruncatedRecordHeadersGracefully) {
+    // Declares 80 bytes in header but buffer supplies zero payload bytes
+    std::vector<uint8_t> truncated_rec = {0x16, 0x03, 0x03, 0x00, 0x50};
+
+    ClientHelloData client{};
+    EXPECT_FALSE(parse_client_hello(truncated_rec.data(), truncated_rec.size(), client));
+}

@@ -26,19 +26,6 @@ inline void append_hex4_joined(std::string &out, const std::vector<uint16_t> &ve
     }
 }
 
-struct ThreadLocalSha256Context {
-    EVP_MD_CTX *ctx{nullptr};
-    ThreadLocalSha256Context() : ctx(EVP_MD_CTX_new()) {}
-    ~ThreadLocalSha256Context() {
-        if (ctx) {
-            EVP_MD_CTX_free(ctx);
-            ctx = nullptr;
-        }
-    }
-    ThreadLocalSha256Context(const ThreadLocalSha256Context&) = delete;
-    ThreadLocalSha256Context& operator=(const ThreadLocalSha256Context&) = delete;
-};
-
 inline const char* resolve_ja4_version(const ClientHelloData &client) noexcept {
     if (!client.supported_versions.empty()) {
         bool has_13 = false, has_12 = false, has_11 = false, has_10 = false;
@@ -67,7 +54,7 @@ inline const char* resolve_ja4_version(const ClientHelloData &client) noexcept {
 }
 
 inline void resolve_ja4_alpn(std::string_view alpn, char &first, char &last) noexcept {
-    if (alpn.empty()) {
+    if (alpn.empty() || alpn.data() == nullptr) {
         first = '0';
         last  = '0';
         return;
@@ -79,7 +66,7 @@ inline void resolve_ja4_alpn(std::string_view alpn, char &first, char &last) noe
 }
 
 inline bool is_literal_ip(std::string_view host) noexcept {
-    if (host.empty()) return false;
+    if (host.empty() || host.data() == nullptr) return false;
     if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
         host.remove_prefix(1);
         host.remove_suffix(1);
@@ -101,17 +88,27 @@ inline bool is_literal_ip(std::string_view host) noexcept {
 } // anonymous namespace
 
 std::string sha256_hex_12(std::string_view input) {
-    static thread_local ThreadLocalSha256Context tls_ctx;
-    if (!tls_ctx.ctx) return "000000000000";
+    if (input.empty()) return "000000000000";
+
+    const EVP_MD *md = EVP_sha256();
+    if (!md) return "000000000000";
+
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) return "000000000000";
 
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int digest_len = 0;
 
-    if (EVP_DigestInit_ex(tls_ctx.ctx, EVP_sha256(), nullptr) != 1 ||
-        EVP_DigestUpdate(tls_ctx.ctx, input.data(), input.size()) != 1 ||
-        EVP_DigestFinal_ex(tls_ctx.ctx, digest, &digest_len) != 1) {
+    const void *data_ptr = input.data() ? input.data() : "";
+
+    if (EVP_DigestInit_ex(ctx, md, nullptr) != 1 ||
+        EVP_DigestUpdate(ctx, data_ptr, input.size()) != 1 ||
+        EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
+        EVP_MD_CTX_free(ctx);
         return "000000000000";
     }
+
+    EVP_MD_CTX_free(ctx);
 
     std::string hex_str;
     hex_str.resize(12);
@@ -186,7 +183,6 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
             if (!filtered_exts.empty()) {
                 fp.raw_ja4_c.push_back('_');
             }
-            // Signature algorithms MUST maintain original wire order per JA4 specification
             append_hex4_joined(fp.raw_ja4_c, client.signature_algorithms, ',');
         }
 
@@ -195,8 +191,10 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
 
     // Assemble Full JA4 String
     fp.full_fp.reserve(36);
-    fp.full_fp.append(fp.ja4_a).push_back('_');
-    fp.full_fp.append(fp.ja4_b).push_back('_');
+    fp.full_fp.append(fp.ja4_a);
+    fp.full_fp.push_back('_');
+    fp.full_fp.append(fp.ja4_b);
+    fp.full_fp.push_back('_');
     fp.full_fp.append(fp.ja4_c);
 
     return fp;
@@ -255,8 +253,10 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
 
     // Assemble Full JA4S String
     fp.full_fp.reserve(26);
-    fp.full_fp.append(fp.ja4_a).push_back('_');
-    fp.full_fp.append(fp.ja4_b).push_back('_');
+    fp.full_fp.append(fp.ja4_a);
+    fp.full_fp.push_back('_');
+    fp.full_fp.append(fp.ja4_b);
+    fp.full_fp.push_back('_');
     fp.full_fp.append(fp.ja4_c);
 
     return fp;
