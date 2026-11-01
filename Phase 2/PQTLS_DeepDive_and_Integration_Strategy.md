@@ -1,353 +1,222 @@
-# Post-Quantum TLS (PQ-TLS): Integration Blueprint & Presentation Strategy
-**CS331: Network Security & TLS Fingerprinting (Phase 2 Revamp)**  
-**Target:** High-Speed C++ Engine (`tlsfp_phase2`)  
+# Post-Quantum TLS (PQ-TLS): Conceptual Blueprint, Protocol Mechanics & Engine Extension Strategy
+**CS331: Computer Networks — Network Security & TLS Fingerprinting (Phase 2 Revamp)**  
+**Team T014** · **Target Binary:** `tlsfp_phase2` · **Part 2 Final Deliverable**  
+**Governing Specifications:**  
+- **RFC 10024:** Hybrid Key Exchange in TLS 1.3 (August 2026)  
+- **RFC 9954:** Combiner Function for Hybrid Key Exchange in TLS 1.3  
+- **NIST FIPS 203:** Module-Lattice-Based Key-Encapsulation Mechanism Standard (ML-KEM, August 2024)  
+- **RFC 8446:** The Transport Layer Security (TLS) Protocol Version 1.3  
+- **RFC 8701:** Generating Extensible Extensions and Ciphers (GREASE)  
+- **RFC 9293:** Transmission Control Protocol (TCP)  
+- **RFC 9849:** TLS Encrypted Client Hello (ECH)  
 
 ---
 
 ## 1. Executive Summary: The Post-Quantum Paradigm Shift
 
-Classical asymmetric cryptography (RSA, Diffie-Hellman, ECDHE) relies on mathematical problems (integer factorization, discrete logarithms, and elliptic curve discrete logs) that are vulnerable to quantum computing.
+Classical asymmetric cryptography (RSA, Diffie-Hellman, ECDHE) relies on mathematical problems—specifically integer factorization and the discrete logarithm problem over finite fields and elliptic curves—that are vulnerable to quantum computing.
 
-When a Cryptanalytically Relevant Quantum Computer (CRQC) becomes viable, **Shor's Algorithm** will solve these problems in polynomial time ($\mathcal{O}((\log N)^3)$). While symmetric cryptography (AES-256, SHA-256) remains quantum-resistant under Grover's Algorithm (which only halves the effective key length), **all classical TLS key exchanges (X25519, P-256, RSA) will be completely compromised**.
+When a Cryptanalytically Relevant Quantum Computer (CRQC) becomes viable, **Shor's Algorithm** will solve these problems in polynomial time ($\mathcal{O}((\log N)^3)$). While symmetric cryptography (AES-256, SHA-256) remains quantum-resistant under Grover's Algorithm (which merely halves the effective bit-security), **all classical key exchange mechanisms (X25519, P-256, RSA) will be completely compromised**.
 
-### The Immediate Threat: "Harvest Now, Decrypt Later" (HNDL)
-Adversaries and nation-states do not need to possess a quantum computer today to compromise security. Under HNDL attacks, adversaries capture and archive petabytes of encrypted TLS traffic crossing internet backbones today, waiting for quantum computers to decrypt it retroactively.
+### 1.1 The Immediate Operational Threat: "Harvest Now, Decrypt Later" (HNDL)
+Adversaries and nation-states do not need to possess a quantum computer today to compromise encrypted communications. Under HNDL attacks, adversaries passively capture and archive encrypted TLS sessions crossing public network infrastructure today, waiting for quantum computers to decrypt the pre-master secrets retroactively.
 
-### The IETF & NIST Solution: Hybrid Key Exchange (FIPS 203)
-In August 2024, NIST finalized **FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism (ML-KEM)**, standardized from the CRYSTALS-Kyber algorithm. Rather than relying solely on a post-quantum algorithm, the industry deployed **Hybrid Key Exchange**:
-$$\text{Shared Secret} = \text{HKDF-Extract}(0, \text{ECDHE Secret} \parallel \text{ML-KEM Secret})$$
-
-This dual-layer mechanism guarantees that even if a mathematical breakthrough breaks ML-KEM, classical ECDHE still protects the session; if quantum computers emerge, ML-KEM protects the session.
-
----
-
-## 2. The Major Academic Discovery: The "JA4 Blind Spot"
-
-A critical research finding emerges when evaluating how existing fingerprinting standards handle Post-Quantum TLS:
-
-### How JA4 Works
-FoxIO's JA4 standard constructs three sections:
-- **`ja4_a`:** Protocols, TLS version, SNI indicator (`d` or `i`), cipher count, extension count, ALPN.
-- **`ja4_b`:** 12-character SHA-256 hash of numerically sorted cipher suite IDs.
-- **`ja4_c`:** 12-character SHA-256 hash of numerically sorted extension IDs (excluding SNI/ALPN) $+$ wire-ordered signature algorithms.
-
-### The Problem: JA4 Is Completely Blind to Post-Quantum TLS
-1. **Extensions Hashed by ID, Not Payload:** Both classical Chrome and Post-Quantum Chrome transmit extension `0x0033` (`key_share`) and `0x000a` (`supported_groups`). The extension IDs are identical.
-2. **Elliptic Curves & Supported Groups are Ignored:** To reduce hash churn, FoxIO deliberately omitted `supported_groups` from JA4 (unlike JA3, which includes groups in Field 4).
-3. **The Consequence:**
-   $$\mathbf{JA4}(\text{Chrome 130 with Classical X25519}) \equiv \mathbf{JA4}(\text{Chrome 130 with Quantum-Safe ML-KEM-768})$$
-   A legacy client vulnerable to Harvest-Now-Decrypt-Later and a modern quantum-safe client produce the **exact same JA4 hash**!
-4. **JA3 vs. JA4 Behavior:** JA3 *does* change because Field 4 gains decimal `4588` (`0x11ec`), but this causes JA3 database lookup misses.
-5. **Our Academic Contribution:** Our engine bridges this critical blind spot by providing **semantic wire-level PQC inspection** on top of JA4, exposing quantum-readiness directly on the wire without breaking hash stability.
+### 1.2 The Standardized Defense: Hybrid Key Exchange (RFC 10024 & RFC 9954)
+NIST FIPS 203 standardizes ML-KEM itself as a mathematical Key-Encapsulation Mechanism. The integration of ML-KEM into TLS 1.3 is standardized by the IETF in **RFC 10024** (Hybrid Key Exchange in TLS 1.3) using the dual-PRF combiner construction from **RFC 9954**:
+- Rather than immediately abandoning vetted elliptic curves, modern TLS clients and servers negotiate a **Hybrid Key Exchange** combining a post-quantum KEM (ML-KEM) with a classical ECDHE curve (X25519 or P-256).
+- **Secret Combination:** Both parties compute:
+  $$\text{Shared Secret } Z = Z_{\text{MLKEM}} \parallel Z_{\text{ECDHE}}$$
+  This concatenated value $Z$ is fed directly into the standard TLS 1.3 key schedule (RFC 8446 §7.1) as the input keying material for `HKDF-Extract(0, Z)`.
+- **Dual Security Guarantee:** Even if an unforeseen algebraic breakthrough weakens ML-KEM, classical ECDHE guarantees security against classical eavesdroppers; if quantum computers emerge, ML-KEM protects the session against retroactive decryption.
+- **Authentication Scope Caveat:** Hybrid key exchange provides post-quantum *confidentiality* against passive recording. It does **not** provide post-quantum *authentication*: the server's certificate and signature algorithms (`signature_algorithms`, `0x000d`) remain classical RSA or ECDSA (RFC 10024 §1).
 
 ---
 
-## 3. Wire Protocol Mechanics: The Key Share Explosion
+## 2. Protocol Facts: Wire Mechanics, Codepoints & Chronology
+
+### 2.1 Standardized Codepoints & Chronological Deployment
+Post-quantum TLS adoption has progressed across distinct chronological phases:
+
+| Group Codepoint | Standard Name | Cryptographic Composition | Wire Order | Deployment Chronology |
+| :--- | :--- | :--- | :--- | :--- |
+| **`0x6399`** | `X25519Kyber768Draft00` | X25519 + Kyber-768 Draft | Kyber \|\| X25519 | **Precursor:** Chrome 124–130 (early Cloudflare/Google trials) |
+| **`0x639a`** | `SecP256r1Kyber768Draft00` | NIST P-256 + Kyber-768 Draft | Kyber \|\| P-256 | **Precursor:** Early enterprise/NIST testbeds |
+| **`0x11ec`** | `X25519MLKEM768` | X25519 + NIST FIPS 203 ML-KEM-768 | **ML-KEM-768 \|\| X25519** | **IETF Standard:** Chrome 131+, Go 1.24+, OpenSSL 3.5+ (RFC 10024) |
+| **`0x11eb`** | `SecP256r1MLKEM768` | NIST P-256 + ML-KEM-768 | **ML-KEM-768 \|\| P-256** | **IETF Standard:** FIPS/government hybrid profile (RFC 10024) |
+| **`0x11ed`** | `SecP384r1MLKEM1024` | NIST P-384 + ML-KEM-1024 | **ML-KEM-1024 \|\| P-384** | **IETF Standard:** High-security profile (RFC 10024) |
+
+*Important Wire Clarification:* RFC 10024 §3 explicitly mandates the wire order: the **ML-KEM component comes FIRST**, and the **ECDHE component comes SECOND**.
+
+### 2.2 Direction-Specific Key Share Dimensions (RFC 10024 §3)
+The wire size of post-quantum key exchange payloads diverges substantially between the client offer and the server response:
 
 ```
-                            CLASSICAL vs. HYBRID TLS 1.3
-┌────────────────────────────────────────┐    ┌────────────────────────────────────────┐
-│         Classical ClientHello          │    │          Hybrid PQ ClientHello         │
-│                                        │    │                                        │
-│  supported_groups (0x000a):            │    │  supported_groups (0x000a):            │
-│  └── 0x001d (x25519)                   │    │  ├── 0x11ec (X25519MLKEM768) [Pref #1] │
-│                                        │    │  └── 0x001d (x25519)         [Fallback]│
-│  key_share (0x0033):                   │    │                                        │
-│  └── Group: 0x001d                     │    │  key_share (0x0033):                   │
-│      └── Public Key: 32 Bytes          │    │  └── Group: 0x11ec                     │
-│                                        │    │      ├── Classical Key:  32 Bytes      │
-│                                        │    │      └── ML-KEM-768 Key: 1184 Bytes    │
-│                                        │    │          └── Total Share: 1216 Bytes   │
-│                                        │    │                                        │
-│  Total Handshake: ~500 - 800 Bytes     │    │  Total Handshake: 2500 - 3800 Bytes    │
-│  TCP Segments:    1 Packet (No Frag)   │    │  TCP Segments:    2 - 3 Packets (Frag!) │
-└────────────────────────────────────────┘    └────────────────────────────────────────┘
+                          RFC 10024 KEY SHARE FIELD SIZES
+┌─────────────────────┬───────────┬──────────────────────────┬──────────────────────────┐
+│ Hybrid Group Name   │ Codepoint │ Client Share (key_share) │ Server Share (key_share) │
+├─────────────────────┼───────────┼──────────────────────────┼──────────────────────────┤
+│ X25519MLKEM768      │  0x11ec   │ 1216 Bytes               │ 1120 Bytes               │
+│                     │           │ (1184B KEM PK + 32B EC)  │ (1088B CT + 32B EC)      │
+├─────────────────────┼───────────┼──────────────────────────┼──────────────────────────┤
+│ SecP256r1MLKEM768   │  0x11eb   │ 1249 Bytes               │ 1153 Bytes               │
+│                     │           │ (1184B KEM PK + 65B EC)  │ (1088B CT + 65B EC)      │
+├─────────────────────┼───────────┼──────────────────────────┼──────────────────────────┤
+│ SecP384r1MLKEM1024  │  0x11ed   │ 1665 Bytes               │ 1665 Bytes               │
+│                     │           │ (1568B KEM PK + 97B EC)  │ (1568B CT + 97B EC)      │
+└─────────────────────┴───────────┴──────────────────────────┴──────────────────────────┘
 ```
-
-### Standardized Codepoints & Chronology ("Carbon Dating")
-
-| Group Codepoint | Standard Name | Cryptographic Composition | Deployment Timeline |
-| :--- | :--- | :--- | :--- |
-| **`0x6399`** | `X25519Kyber768Draft00` | X25519 (32B) + Kyber-768 Draft (1184B) | **Precursor:** Chrome 116–123 (Aug 2023 – Apr 2024), early Cloudflare |
-| **`0x11ec`** | `X25519MLKEM768` | X25519 (32B) + NIST FIPS 203 ML-KEM (1184B) | **Standard:** Chrome 124+, OpenSSL 3.4+, Cloudflare, Google (May 2024–Present) |
-| **`0x11eb`** | `SecP256r1MLKEM768` | NIST P-256 (64B) + ML-KEM-768 (1184B) | **Enterprise / Gov:** Mandatory in government/FIPS regulated environments |
-
-### Key Size Differential & Transport Impact
-- Classical X25519 public key = **32 bytes**.
-- ML-KEM-768 public key = **1,184 bytes**.
-- Combined hybrid key share = **1,216 bytes** ($\approx 38\times$ larger).
-- Standard Ethernet MTU = **1500 bytes** (IPv4 TCP MSS $\approx 1448\text{ B}$).
-- A modern PQ-TLS ClientHello reaches **2.5 KB to 3.8 KB**, **forcing TCP fragmentation across 2 to 3 packets**.
-- **Architectural Validation:** This empirically validates the necessity of our **Two-Tier Accumulator (8 KB buffer)**. Single-packet sniffers fail on modern post-quantum connections.
+- **P-256 Encoding:** P-256 points in TLS 1.3 are encoded uncompressed (1 byte format `0x04` $+$ 32 bytes X $+$ 32 bytes Y = **65 bytes**). Thus, `SecP256r1MLKEM768` client share = $1184 + 65 = \mathbf{1249\text{ bytes}}$.
+- **P-384 Encoding:** Uncompressed P-384 point = $1 + 48 + 48 = \mathbf{97\text{ bytes}}$. Client share = $1568 + 97 = \mathbf{1665\text{ bytes}}$.
+- **Server Asymmetry:** In ML-KEM-768, the client transmits an encapsulation public key (1,184 bytes), while the server responds with a ciphertext encapsulation (1,088 bytes) plus its 32-byte X25519 public key, totaling **1,120 bytes**.
+- These dimensions describe strictly the `key_exchange` field inside extension `0x0033`, not the complete packet length.
 
 ---
 
-## 4. Technical Blueprint: Updating the Current C++ Engine
+## 3. The Fingerprinting Frontier: The JA4 Relationship
+
+### 3.1 How JA4 Evaluates ClientHellos
+FoxIO's JA4 algorithm hashes three distinct components:
+- **`ja4_a`:** Protocol transport, TLS version, SNI indicator (`d` or `i`), cipher count, extension count, ALPN.
+- **`ja4_b`:** SHA-256 (truncated to 12 hex characters) of numerically sorted cipher suite IDs.
+- **`ja4_c`:** SHA-256 (truncated to 12 hex characters) of numerically sorted extension IDs (excluding SNI `0x0000` and ALPN `0x0010`) $+$ wire-ordered signature algorithm IDs.
+
+### 3.2 The Grounded Evaluation of JA4 & PQC
+1. **Payload Agnosticism:** JA4 hashes extension IDs, **not** extension payloads. Both classical Chrome and Post-Quantum Chrome transmit extension `0x0033` (`key_share`) and extension `0x000a` (`supported_groups`).
+2. **Supported Groups Omission:** FoxIO deliberately omitted `supported_groups` (`0x000a`) from `ja4_c` to reduce hash churn caused by varying elliptic curve offerings across client environments.
+3. **The Concrete Finding:**  
+   If all other client offerings (cipher suites, extensions, signature algorithms) remain unchanged, a client offering classical X25519 and a client offering X25519MLKEM768 will produce the **exact same JA4 hash**.
+4. **The Project's Role:**  
+   JA4 alone does not identify the key-exchange group. Our engine reports group offerings and key-share metadata alongside JA4, evaluating its complementary security inventory value.
+
+### 3.3 JA3 vs. JA4 Under PQC
+- **JA3:** Field 4 of JA3 hashes the exact decimal values of `supported_groups`. When a client adds `0x11ec` (`4588`) or `0x6399` (`25497`), the JA3 hash changes completely, causing database cache misses.
+- **Connection Security vs. Client Identity:** A ClientHello fingerprint cannot determine a future server choice. A client offering `0x11ec` can result in a hybrid session with a modern server, or a classical fallback with an older server. Client identification and connection security posture are separate tasks.
+
+---
+
+## 4. Transport Layer Reality: Stream Accumulation for PQ-TLS
+
+### 4.1 TCP Segmentation vs. IP Fragmentation
+A common network engineering inaccuracy is conflating TCP segmentation with IP fragmentation:
+- **TCP Segmentation (RFC 9293):** Operating at Layer 4, the operating system splits the application-layer TLS stream across multiple TCP segments bounded by the Maximum Segment Size (MSS). No IP-layer fragmentation occurs.
+- **MSS Reality:** On standard Ethernet networks (MTU 1500 bytes), IPv4 TCP MSS is typically **1448 to 1460 bytes** (accounting for IP and TCP options like timestamps).
+
+### 4.2 Handshake Size Dimensions & Real-World Framing
+- A classical ClientHello fits comfortably in a single packet (roughly 500–800 bytes).
+- A modern hybrid ClientHello offering `X25519MLKEM768` carries a **1,216-byte key share**. Combined with standard extensions, session ID, ciphers, and GREASE padding, the handshake reaches approximately **1.8 KB to 2.4 KB**.
+- When combined with Encrypted Client Hello (ECH, ~350–450 bytes), the total ClientHello spans **2.2 KB to 2.8 KB**.
+- **Transport Consequence:** Modern post-quantum browser handshakes **routinely span 2 TCP segments** on standard MTU networks.
+
+### 4.3 The Role of the 8 KB Accumulator
+- **Implementation Tradeoff:** An 8192-byte (8 KB) scratchpad is an engine implementation limit, not a protocol guarantee. (RFC 8446 allows TLS plaintext records up to 16 KB, and handshakes can span multiple records).
+- **Engine Function:** Our **Two-Tier Accumulator** buffers multi-segment handshakes up to 8 KB without heap allocations in steady state. If segments exceed 8 KB or arrive out-of-order beyond tracking windows, the engine safely flags `ACCUMULATOR_OVERFLOW` or `GAP_DETECTED` rather than corrupting memory.
+
+---
+
+## 5. How PQ-TLS Extends & Upgrades Our Engine
+
+Integrating Post-Quantum TLS telemetrics transforms our engine from a simple passive hash calculator into a **comprehensive cryptographic intelligence and connection security inventory platform**:
 
 ```
-                             PQC DISSECTION PIPELINE
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 ClientHello Stream                                     │
-│                                                                                        │
-│  ClientHelloData::supported_groups (Pre-filtered, GREASE-free):                        │
-│  └── [0x11ec, 0x001d, 0x0017, ...]                                                     │
-│                                                                                        │
-│  Extension 0x0033 (key_share):                                                         │
-│  └── Offered Share: Group 0x11ec, Length: 1216 bytes                                   │
-└──────────────────────────────────────────┬─────────────────────────────────────────────┘
-                                           │
-                                           ▼
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                              Phase 2 Engine Dissection                                 │
-│                                                                                        │
-│  1. Zero-Overhead Group Check: Inspect out_data.supported_groups directly              │
-│  2. GREASE-Aware Top Preference: out_data.supported_groups[0] == 0x11ec                │
-│  3. KeyShare Dimensioning: Measure offered key_exchange length in key_share (>= 1200B) │
-│  4. ServerHello Correlation: Parse ext 0x0033 to verify server selected_group          │
+│                        HOW PQ-TLS ENHANCES THE ENGINE                                  │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ 1. Bridges the JA4 Blind Spot    │ Reports key exchange group & share dimension        │
+│                                  │ alongside JA4 without breaking hash stability.      │
+├──────────────────────────────────┼─────────────────────────────────────────────────────┤
+│ 2. Connection Security Inventory │ Distinguishes negotiated hybrid sessions from       │
+│                                  │ classical fallbacks (HYBRID vs. CLASSICAL).         │
+├──────────────────────────────────┼─────────────────────────────────────────────────────┤
+│ 3. Proactive vs. Reactive Audit  │ Detects whether client supplied a 1.2 KB share      │
+│                                  │ upfront or deferred share transmission to an HRR.   │
+├──────────────────────────────────┼─────────────────────────────────────────────────────┤
+│ 4. Validates Stream Accumulation │ Exercises bounded accumulator slow-path against     │
+│                                  │ real-world multi-segment 2 KB+ TCP streams.         │
+├──────────────────────────────────┼─────────────────────────────────────────────────────┤
+│ 5. Empirical Profile Consistency │ Correlates L4 TCP parameters (JA4T) with modern     │
+│                                  │ crypto library capabilities (Go 1.24+, Chrome 131+).│
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Step 1: Data Structure Additions (`include/tlsfp/types.hpp` & `parser.hpp`)
-1. Extend `types.hpp` with dedicated PQC tracking:
-```cpp
-enum class PQCAlgorithm : uint16_t {
-    NONE                     = 0x0000,
-    X25519_KYBER768_DRAFT00  = 0x6399, // Precursor (Chrome 116-123)
-    X25519_MLKEM768          = 0x11ec, // Official Standard (Chrome 124+, OpenSSL 3.4+)
-    SECP256R1_MLKEM768       = 0x11eb, // FIPS / Enterprise hybrid
-    SECP256R1_KYBER768       = 0x45f9  // Early P-256 draft
-};
+### 5.1 Bridging the "JA4 Blind Spot"
+While JA4 provides an exceptionally stable fingerprint across browser updates by omitting elliptic curves, this exact design decision renders it insensitive to post-quantum adoption:
+- A connection secured with classical X25519 (vulnerable to future quantum decryption) and a connection secured with hybrid X25519MLKEM768 produce identical JA4 hashes.
+- **Engine Upgrade:** Our engine extracts and reports the advertised groups, top preference, and key share dimensions as an orthogonal metadata layer. Operators obtain both the stable client identity (via JA4) and the cryptographic security posture (via PQ telemetry) in a single unified output.
 
-struct PQCMetadata {
-    bool is_pqc{false};
-    PQCAlgorithm algorithm{PQCAlgorithm::NONE};
-    std::string algorithm_name{"NONE"};
-    bool is_proactive_keyshare{false}; // Sent >= 1200B key share in initial ClientHello
-    uint16_t key_share_len{0};         // e.g., 1216 bytes
-    bool is_top_preference{false};     // PQC group was preferred first non-GREASE group
-    bool server_accepted{false};       // Correlated with ServerHello: PQC negotiated
-};
-```
+### 5.2 Connection Security Inventory & Negotiation Telemetry
+Passive fingerprinting engines traditionally inspect only the ClientHello. PQ-TLS integration extends our engine across both directions of the handshake:
+- **Client Intent:** Did the client offer post-quantum capability (`PROACTIVE_SHARE_VALID` vs. `SUPPORTED_ONLY`)?
+- **Negotiated Outcome:** Did the server agree to hybrid key exchange (`HYBRID_SELECTED_OBSERVED`), or did the connection fall back to classical curves (`CLASSICAL_SELECTED_AFTER_HYBRID_OFFER`)?
+- **Renegotiation Detection:** Did the server issue a `HelloRetryRequest` (`HRR_REQUESTED_RETRY`) to request a key share that the client supported but did not proactively transmit?
+- This allows enterprise auditors to measure true quantum-readiness across network segments rather than assuming client capabilities equate to established security.
 
-2. Extend `ClientHelloData` and `ServerHelloData` in `parser.hpp`:
-```cpp
-struct ClientHelloData {
-    uint16_t client_version{0};
-    std::vector<uint16_t> cipher_suites;
-    std::vector<uint16_t> extensions;
-    std::vector<uint16_t> supported_groups;
-    std::vector<uint8_t>  ec_point_formats;
-    std::vector<uint16_t> supported_versions;
-    std::vector<uint16_t> signature_algorithms;
+### 5.3 Proactive vs. Reactive Negotiation Analysis
+Clients navigate a bandwidth-versus-latency tradeoff when offering post-quantum keys:
+- **Proactive KEM Negotiation:** Desktop clients on unmetered connections proactively include the 1,216-byte key share in their initial ClientHello to establish the session in 1 RTT.
+- **Reactive KEM Negotiation:** Constrained mobile clients or battery-sensitive endpoints may advertise `0x11ec` in `supported_groups` but supply only a 32-byte classical key share initially to avoid transmitting 1.2 KB over cellular links unless the server explicitly demands it.
+- **Engine Upgrade:** By verifying the presence and physical dimension of the offered share vector ($\ge 1200\text{ bytes}$), our engine categorizes client behavior into `PROACTIVE_SHARE_VALID` vs. `SUPPORTED_ONLY`.
 
-    bool has_sni{false};
-    std::string_view sni;
-    std::string_view first_alpn;
+### 5.4 Empirical Validation of the Stream Accumulation Pipeline
+In classical TLS 1.3, the vast majority of ClientHellos fit inside a single 1500-byte Ethernet frame, rarely exercising multi-segment assembly paths.
+- The inclusion of hybrid key shares (1,216 bytes) and ECH payloads (~400 bytes) pushes modern handshakes to 2.0 KB – 2.8 KB, forcing TCP segmentation across 2 packets.
+- **Engine Upgrade:** PQ-TLS serves as the living empirical testbed for our **Two-Tier Accumulator**, demonstrating that our bounded 8 KB scratchpad reassembles fragmented handshakes with zero steady-state heap allocations.
 
-    PQCMetadata pqc; // Post-Quantum telemetry
-    ECHMetadata ech; // Encrypted Client Hello telemetry
-
-    void clear() noexcept {
-        client_version = 0;
-        cipher_suites.clear();
-        extensions.clear();
-        supported_groups.clear();
-        ec_point_formats.clear();
-        supported_versions.clear();
-        signature_algorithms.clear();
-        has_sni = false;
-        sni = {};
-        first_alpn = {};
-        pqc = {};
-        ech = {};
-    }
-};
-
-struct ServerHelloData {
-    uint16_t server_version{0};
-    uint16_t selected_version{0};
-    uint16_t selected_cipher{0};
-    uint16_t selected_group{0}; // Populated from ServerHello extension 0x0033 (key_share)
-    std::vector<uint16_t> extensions;
-    std::string_view first_alpn;
-
-    void clear() noexcept {
-        server_version = 0;
-        selected_version = 0;
-        selected_cipher = 0;
-        selected_group = 0;
-        extensions.clear();
-        first_alpn = {};
-    }
-};
-```
-
-### Step 2: Efficient RFC Parsing in `src/parser.cpp`
-Extension `0x0033` (`key_share`) is parsed during the extension loop, and the final PQC group check is performed in the **post-parsing finalization pass** right after all extensions are read (avoiding extension ordering race conditions and redundant parsing):
-
-```cpp
-// 1. Inside parse_client_extensions(): Inspect key_share extension (0x0033)
-if (ext_type == 0x0033) {
-    ByteReader ks_reader(ext_data, ext_len);
-    uint16_t client_shares_len = 0;
-    if (ks_reader.read_u16_be(client_shares_len)) {
-        while (ks_reader.remaining() >= 4) {
-            uint16_t grp = 0, klen = 0;
-            if (ks_reader.read_u16_be(grp) && ks_reader.read_u16_be(klen)) {
-                if (ks_reader.skip(klen)) {
-                    if (grp == 0x11ec || grp == 0x6399 || grp == 0x11eb) {
-                        out_data.pqc.is_proactive_keyshare = (klen >= 1200);
-                        out_data.pqc.key_share_len = klen;
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 2. In post-parsing finalization pass (right after extension loop finishes):
-// Direct inspection of pre-filtered supported_groups (zero redundant parsing)
-for (size_t i = 0; i < out.supported_groups.size(); ++i) {
-    uint16_t grp = out.supported_groups[i];
-    if (grp == 0x11ec || grp == 0x6399 || grp == 0x11eb || grp == 0x45f9) {
-        out.pqc.is_pqc = true;
-        out.pqc.algorithm = static_cast<PQCAlgorithm>(grp);
-        // GREASE values were already pruned; index 0 is guaranteed the true top preference
-        out.pqc.is_top_preference = (i == 0);
-
-        if (grp == 0x11ec) out.pqc.algorithm_name = "X25519MLKEM768";
-        else if (grp == 0x6399) out.pqc.algorithm_name = "X25519Kyber768Draft00";
-        else if (grp == 0x11eb) out.pqc.algorithm_name = "SecP256r1MLKEM768";
-        break;
-    }
-}
-```
-
-### Step 3: ServerHello key_share Parsing in `parse_server_extensions()`
-In `parse_server_hello()`, parse extension `0x0033`:
-```cpp
-if (ext_type == 0x0033) { // key_share in ServerHello
-    ByteReader ks_reader(ext_data, ext_len);
-    uint16_t grp = 0;
-    if (ks_reader.read_u16_be(grp)) {
-        out.selected_group = grp; // Selected server key exchange group
-    }
-}
-```
-
-### Step 4: ServerHello Correlation in `src/capture.cpp`
-When correlating the server's response:
-- If `server_hello.selected_group == 0x11ec` or `0x6399`:
-  - `pqc.server_accepted = true`
-  - Status: **`QUANTUM_SAFE_HYBRID`**
-- If client offered PQC, but server selected classical `0x001d` (X25519):
-  - Status: **`PQC_DOWNGRADED_CLASSICAL`**
+### 5.5 Multi-Layer Profile Consistency
+Rather than claiming to be an infallible "bot detector" (since Go 1.24+ and modern automated toolchains natively support `0x11ec`), our engine uses PQ telemetry as part of an objective **Profile Consistency Framework**:
+- Cross-references Layer 4 transport metrics (JA4T: TCP window size, MSS, scale factor) with Layer 6 TLS capabilities (PQC group preferences, extension order).
+- Flags cryptographic anomalies: for example, a ClientHello advertising `0x11ec` whose `key_share` vector length does not match the strict 1,216-byte RFC 10024 boundary is flagged as `SHARE_MALFORMED`.
 
 ---
 
-## 5. What PQ-TLS Means for the Overall Tool
+## 6. Epistemological Framework: The Evidence Contract
 
-### The Core Philosophy: Why Wire Observation Defeats Header Spoofing
-A common critical question in network security is:  
-> *"As a passive sniffer, aren't we just reading integers and running conditionals?"*
+Every output field displayed by the engine maps strictly to an authoritative wire source, an allowed claim, and an explicit unknown state:
 
-The answer is **yes, and that is precisely where the defensive power lies**:
-1. **The Attacker's Dilemma:** In classical TLS, attackers trivially evade detection using HTTP header spoofing (`User-Agent: Chrome/130`) combined with `curl-impersonate` (which easily mimics classical cipher suites).
-2. **The Cryptographic Barrier:** To fake modern Chrome 124+, an attacker cannot just copy a text string. They must:
-   - Implement the complex module-lattice mathematics of NIST FIPS 203 (ML-KEM-768),
-   - Generate and transmit an actual 1,184-byte lattice public key, and
-   - If ECH is active, resolve DNS HTTPS/SVCB records and execute HPKE encryption.
-3. Standard scraping frameworks (Python `requests`, `urllib3`, Go `net/http`, Scrapy, legacy headless tools) **do not possess these heavy cryptographic engines**.
-4. By checking the multi-variable correlation:
-   $$\text{User-Agent claims Chrome 124+} \land (\text{PQC Group } 0x11ec \notin \text{supported\_groups} \lor \text{KeyShare} < 1200\text{ B}) \implies \mathbf{100\%\ Deterministic\ Impostor}$$
-
-| Capability | Classical TLS Engine (JA3 / Phase 1) | Phase 2 Engine with PQ-TLS Integration |
-| :--- | :--- | :--- |
-| **Fragmentation Handling** | Fails or truncates on $> 1500\text{ B}$ ClientHellos (no multi-segment accumulator). | Two-Tier Accumulator seamlessly reassembles 3.5 KB handshakes with zero allocs. |
-| **JA4 Visibility** | **Blind:** Produces the identical hash for classical and post-quantum clients. | **Semantic Bridge:** Exposes quantum-readiness alongside JA4. |
-| **Version Chronology** | Blended into generic hashes. | **"Carbon-Dates" client software:** Distinguishes Chrome 116–123 (`0x6399`) from Chrome 124+ (`0x11ec`). |
-| **Threat Detection** | Vulnerable to User-Agent header spoofing. | **The PQC Impersonation Trap:** Scrapers claiming Chrome 124+ without `0x11ec` are unmasked. |
-| **Security Auditing** | No visibility into quantum exposure. | Computes enterprise **Quantum-Readiness Index** and alerts on HNDL exposure. |
+| Field / Property | Wire Source | What It Proves (Observed) | What It Infers | When It Must Remain Unknown (Abstain) |
+| :--- | :--- | :--- | :--- | :--- |
+| **`supported_groups` contains `0x11ec`** | Ext `0x000a` body | Client advertises support for `X25519MLKEM768`. | Client crypto library supports RFC 10024 hybrid exchange. | Truncated extension. |
+| **`key_share` contains `0x11ec`** | Ext `0x0033` client share | Client supplied an initial hybrid key share. | Client proactively offers hybrid key exchange. | Initial share omitted (e.g. reactive client). |
+| **`key_share_len == 1216`** | Ext `0x0033` vector | Length matches RFC 10024 client share size. | Validly framed hybrid share vector. | Length mismatch $\rightarrow$ flag `MALFORMED_SHARE`. |
+| **`server_selected_group`** | ServerHello ext `0x0033` | Server selected a specific group for this session. | Cryptographic key exchange group negotiated. | Server omitted `key_share` or sent HRR. |
+| **`connection_posture`** | Handshake correlation | `HYBRID_SELECTED_OBSERVED` vs. `CLASSICAL_SELECTED_AFTER_HYBRID_OFFER`. | Whether the server agreed to hybrid key exchange. | Session incomplete, truncated, or unobserved server flight. |
 
 ---
 
-## 6. Presentation Strategy: How to Present This to the Professor
+## 7. Refined Presentation Strategy & Academic Viva Defense
 
-When presenting to your professor, frame PQ-TLS around **the JA4 blind spot, system resilience, and cryptographic evolution**.
+### 7.1 Slide Deck Structure
+- **Slide 1: The Threat & The Standard:** Shor's algorithm threatens classical forward secrecy ("Harvest Now, Decrypt Later"). The IETF standardized hybrid key exchange in RFC 10024 / RFC 9954 (August 2026), combining ML-KEM-768 with classical ECDHE.
+- **Slide 2: The JA4 Relationship:** JA4 hashes extension IDs, not payloads, and omits supported groups to stabilize hashes. Consequently, JA4 alone does not identify the key exchange group. Our engine reports group and share metadata alongside JA4 to provide connection security posture.
+- **Slide 3: Transport & Segmentation Reality:** A hybrid key share expands by 38× (1216B vs 32B), pushing ClientHellos to ~2.0 KB. On standard Ethernet networks, handshakes span 2 TCP segments. This provides concrete empirical justification for our bounded Two-Tier Accumulator.
+- **Slide 4: Wire Dissection & Directional Asymmetry:** Client shares carry an encapsulation public key (1216B for X25519MLKEM768), while server shares carry an encapsulation ciphertext (1120B). Strict vector bounds validation guarantees memory safety.
+- **Slide 5: Live Empirical Demo:** Comparing classical curl vs. modern Chrome visiting Cloudflare/Google post-quantum endpoints.
 
-### Slide Structure & Talking Points
+### 7.2 Defending Tough Viva Questions
 
-#### Slide 1: The Quantum Problem — "Harvest Now, Decrypt Later"
-- **Key Talking Point:** *"Adversaries are archiving encrypted network flows today to decrypt tomorrow with quantum computers using Shor's algorithm. In August 2024, NIST released FIPS 203 (ML-KEM). Modern browsers have rolled out hybrid key exchange to defend against this."*
-- **Visual:** Diagram showing classical ECDHE vs. ML-KEM-768 hybrid key exchange.
-
-#### Slide 2: The Academic Discovery — The "JA4 Blind Spot"
-- **Key Talking Point:** *"FoxIO designed JA4 to hash extension IDs rather than payloads and omitted supported groups to reduce hash churn. Consequently, JA4 is completely blind to Post-Quantum TLS: Chrome using classical X25519 and Chrome using X25519MLKEM768 produce identical JA4 hashes. Our engine solves this by providing semantic wire-level PQC telemetry."*
-- **Visual:** Side-by-side comparison showing identical JA4 hashes for classical and PQ flows, with our engine's PQC badge highlighting the difference.
-
-#### Slide 3: The Transport Bottleneck & Accumulator Justification
-- **Key Talking Point:** *"PQ-TLS expands the ClientHello key share by 38× (from 32 bytes to 1,216 bytes), pushing the total handshake to 3.5 KB. This physically forces TCP fragmentation across 2 to 3 Ethernet frames. Naive sniffers fail on post-quantum traffic; our Two-Tier Accumulator (8 KB buffer) reassembles it cleanly."*
-- **Visual:** Wireshark split-segment trace showing 1448B + 1448B + 304B frames assembling into one ClientHello.
-
-#### Slide 4: Cryptographic "Carbon Dating" & Impersonation Defense
-- **Key Talking Point:** *"Because PQC standardized in discrete steps, group codepoints act like a chronological timestamp: 0x6399 dates a client to late 2023 / early 2024, while 0x11ec dates a client to mid-2024+. If an automated scraper or C2 framework claims to be Chrome 130 on Windows 11 but only offers classical X25519 (32 bytes), our engine deterministically catches the lie."*
-
-#### Slide 5: Live Demonstration & Evaluation
-- Run `tlsfp_phase2` on:
-  1. A standard `curl` / `Python` connection (Classical X25519, single packet, 32-byte key share).
-  2. A real modern Chrome connection to `https://crypto.cloudflare.com/cdn-cgi/trace` or Google (Hybrid X25519MLKEM768, 1,216-byte key share, multi-segment reassembly).
-- Display the telemetry badge:
-  ```text
-  CLIENT  192.168.1.45:51280 ──▶ 104.16.132.229:443
-    │  JA4:       t13d1517h2_8daaf6152771_cb7bf5808d99  [Chromium (browser)]
-    │  PQC Group: 0x11ec [X25519MLKEM768] (Top Preference: YES)
-    │  Key Share: 1216 Bytes (Proactive Hybrid Share)
-    │  Transport: 2 Segments Reassembled (Total: 2842 Bytes)
-    │  Status:    QUANTUM_SAFE_HYBRID (Server Selected: 0x11ec)
-  ```
-
----
-
-## 7. Answers to Tough Academic Review Questions
-
-- **Q: "Why didn't browsers just switch entirely to ML-KEM-768 instead of using a hybrid?"**  
-  *A: "Lattice-based cryptography is relatively new compared to 30 years of elliptic curve vetting. The IETF and NIST mandated hybrid key exchanges as a fail-safe: if an unforeseen mathematical attack weakens ML-KEM, classical X25519 still guarantees security; if a quantum computer arrives, ML-KEM provides quantum resistance."*
+- **Q: "Why didn't browsers just switch entirely to ML-KEM-768 instead of a hybrid?"**  
+  *A: "Lattice-based cryptography is relatively new compared to 30 years of elliptic curve vetting. RFC 10024 mandates hybrid key exchange as a fail-safe: if an unexpected vulnerability breaks ML-KEM, classical X25519 guarantees security; if a quantum computer arrives, ML-KEM guarantees forward secrecy."*
 
 - **Q: "Does JA4 distinguish between Post-Quantum and Classical connections?"**  
-  *A: "No. This is a foundational limitation of the JA4 specification: JA4 hashes extension IDs (not payloads) and intentionally omits supported groups to stabilize hashes. Because both classical and PQ connections advertise extension 0x0033 and 0x000a, JA4 produces identical hashes for both. Our engine detects and reports PQC at Layer 6 semantically, bridging this gap."*
+  *A: "JA4 hashes extension IDs, not payloads, and intentionally omits supported groups. Therefore, if other extensions and ciphers remain unchanged, classical and post-quantum connections produce identical JA4 hashes. Our engine does not claim to 'fix' JA4; instead, it reports group and key-share metadata alongside JA4 to provide security posture visibility."*
 
-- **Q: "As a passive monitor, isn't your PQC inspection just reading an integer from supported_groups?"**  
-  *A: "No. Inspecting supported_groups alone only shows theoretical intent. Our engine correlates three distinct wire variables: (1) Top-preference group ordering in supported_groups (0x000a), (2) Proactive key share presence and physical key dimension (>= 1200 bytes) in key_share (0x0033), and (3) Server selected group negotiation in ServerHello. This distinguishes proactive post-quantum clients from reactive mobile clients and unmasks header-spoofed scrapers that copy group IDs without embedding real lattice keys."*
+- **Q: "Does a client offering X25519MLKEM768 prove it is genuine Google Chrome?"**  
+  *A: "No. Standard non-browser environments like Go 1.24+ enable X25519MLKEM768 by default. Furthermore, automated tools can drive real Chrome binaries. Observing group 0x11ec indicates client library capability, not software identity or human presence."*
 
-- **Q: "What if a client supports PQC but does NOT send a 1.2 KB key share upfront?"**  
-  *A: "This is known as Reactive PQC. To save bandwidth on mobile networks, some clients list 0x11ec in supported_groups but send only a 32-byte classical key share in key_share. If the server demands PQC, it issues a HelloRetryRequest (HRR), prompting the client to send the 1.2 KB share in a second handshake round. Our engine detects this by checking whether key_share_len >= 1200 on the initial packet."*
+- **Q: "Why is the server key share smaller than the client key share?"**  
+  *A: "In RFC 10024 §3, the client share carries the ML-KEM-768 public key (1,184 bytes) plus the 32-byte X25519 public key (1,216 bytes). The server share carries the ML-KEM-768 ciphertext (1,088 bytes) plus its 32-byte X25519 public key, totaling 1,120 bytes."*
 
-- **Q: "How did you verify that reassembly succeeded without memory corruption?"**  
-  *A: "We validated the Two-Tier Accumulator using GoogleTest unit tests (AccumulatorTest.GRO_Off_ReassemblesThreeSegments and AccumulatorTest.GRO_On_ProcessesJumboFrame), verifying that segmented buffers up to 8 KB reassemble into identical binary representations and match 100% of fingerprint hashes."*
+- **Q: "What if a client lists 0x11ec in supported_groups but sends no initial key share?"**  
+  *A: "TLS 1.3 allows clients to advertise group support without supplying a proactive key share. This is common in bandwidth-constrained clients. If the server selects that group, it issues a HelloRetryRequest (HRR) requesting the share. Our engine tracks this cleanly as SUPPORTED_ONLY."*
 
 ---
 
-## 8. Practical Lab Guide: Generating Ground-Truth PQ-TLS Captures
+## 8. Explicit Non-Claims: What the Engine Does NOT Claim
 
-To record live PQ-TLS traffic for evaluation:
-
-### Option A: Google Chrome / Chromium
-1. Open Google Chrome (version 124 or later).
-2. Visit `chrome://flags/#enable-tls13-kyber` (or search for "Post-Quantum"). Verify it is set to **Enabled** (default in Chrome 124+).
-3. Start the capture engine:
-   ```bash
-   sudo ./Phase\ 2/engine/build/tlsfp_phase2 -i any
-   ```
-4. Navigate to `https://crypto.cloudflare.com/cdn-cgi/trace` or `https://pq.cloudflareresearch.com/`.
-5. The Cloudflare trace page explicitly reports:
-   ```text
-   tls=TLSv1.3
-   kex=X25519MLKEM768
-   ```
-   Confirming active post-quantum key exchange on the wire.
-
-### Option B: OpenSSL 3.4+ CLI
-Using modern OpenSSL with PQC support:
-```bash
-openssl s_client -connect crypto.cloudflare.com:443 -groups X25519MLKEM768 -servername crypto.cloudflare.com
-```
+| Non-Claim | Technical Justification |
+| :--- | :--- |
+| **"NIST FIPS 203 standardizes TLS hybrid exchange"** | FIPS 203 standardizes ML-KEM itself. TLS hybrid key exchange is standardized by IETF in RFC 10024 / RFC 9954. |
+| **"JA4 is completely blind to all aspects of TLS"** | JA4 hashes extension IDs and ciphers. It omits supported groups and payloads by design. Other extensions may still differ. |
+| **"PQC detection deterministically exposes bots"** | Go 1.24+ and modern libraries support ML-KEM; automation tools run real browsers. Crypto capabilities do not prove human presence. |
+| **"Classical selection proves an adversarial downgrade"** | A server selecting X25519 may simply lack post-quantum support. |
+| **"Hybrid key exchange provides post-quantum authentication"** | RFC 10024 hybrid exchange protects confidentiality; digital certificates and signatures remain classical RSA/ECDSA. |
+| **"8 KB accumulator is a TLS protocol guarantee"** | RFC 8446 allows TLS records up to 16 KB. 8 KB is an engine implementation limit. |
