@@ -18,6 +18,16 @@ using namespace tlsfp;
 
 namespace {
 
+// Preserve the requested byte count while providing a real padding extension.
+std::vector<uint8_t> padding_extensions(size_t total_size) {
+    std::vector<uint8_t> bytes(total_size, 0);
+    const size_t body_size = total_size - 4;
+    bytes[1] = 21; // RFC 7685 padding
+    bytes[2] = static_cast<uint8_t>(body_size >> 8);
+    bytes[3] = static_cast<uint8_t>(body_size);
+    return bytes;
+}
+
 FlowKey make_ipv4_key(const char* src, const char* dst, uint16_t sport, uint16_t dport) {
     FlowKey key{};
     key.ip_version = 4;
@@ -197,7 +207,7 @@ TEST_F(AccumulatorTest, Tier1FastPath_SinglePacketCompleteRecord) {
 }
 
 TEST_F(AccumulatorTest, Tier2SlowPath_TwoSegmentReassembly) {
-    auto tls_record = build_client_hello_record({0x1301, 0x1302, 0x1303}, std::vector<uint8_t>(500, 0xBB));
+    auto tls_record = build_client_hello_record({0x1301, 0x1302, 0x1303}, padding_extensions(500));
 
     size_t split_point = 300;
     std::vector<uint8_t> seg1(tls_record.begin(), tls_record.begin() + split_point);
@@ -216,7 +226,7 @@ TEST_F(AccumulatorTest, Tier2SlowPath_TwoSegmentReassembly) {
 }
 
 TEST_F(AccumulatorTest, StaleFlowCleanup) {
-    auto tls_record = build_client_hello_record({0x1301}, std::vector<uint8_t>(300, 0xAA));
+    auto tls_record = build_client_hello_record({0x1301}, padding_extensions(300));
     std::vector<uint8_t> partial(tls_record.begin(), tls_record.begin() + 100);
 
     time_t start_time = 100000;
@@ -238,7 +248,7 @@ TEST_F(AccumulatorTest, GRO_On_ProcessesJumboFrame) {
         large_ciphers.push_back(0x1300 + i);
     }
     // 1600 bytes of extension data yields a total frame of ~1710 bytes (> 1514 MTU)
-    std::vector<uint8_t> extensions(1600, 0x00);
+    auto extensions = padding_extensions(1600);
     auto jumbo_record = build_client_hello_record(large_ciphers, extensions);
 
     ASSERT_GT(jumbo_record.size(), 1514u) << "Jumbo frame payload must exceed Ethernet MTU";
@@ -252,7 +262,7 @@ TEST_F(AccumulatorTest, GRO_On_ProcessesJumboFrame) {
 
 TEST_F(AccumulatorTest, GRO_Off_ReassemblesThreeSegments) {
     std::vector<uint16_t> ciphers = {0x1301, 0x1302, 0x1303};
-    std::vector<uint8_t> extensions(900, 0xAA);
+    auto extensions = padding_extensions(900);
     auto tls_record = build_client_hello_record(ciphers, extensions);
 
     size_t chunk1_sz = 300;
@@ -515,7 +525,7 @@ TEST_F(AccumulatorTest, LRO_Processes_CoalescedJumboFrame_3KB) {
     }
     
     // Simulate 3 KB coalesced frame from hardware LRO NIC (> 1514 MTU)
-    std::vector<uint8_t> extensions(2800, 0x00);
+    auto extensions = padding_extensions(2800);
     auto lro_record = build_client_hello_record(large_ciphers, extensions);
 
     ASSERT_GT(lro_record.size(), 1514u) << "LRO frame must exceed standard Ethernet MTU";
@@ -536,7 +546,7 @@ TEST_F(AccumulatorTest, LRO_Processes_MaxAccumulatorJumboFrame_7KB) {
     }
     
     // Simulate 7 KB coalesced frame near the 8 KB accumulator buffer boundary
-    std::vector<uint8_t> extensions(6800, 0x00);
+    auto extensions = padding_extensions(6800);
     auto max_lro_record = build_client_hello_record(large_ciphers, extensions);
 
     ASSERT_GT(max_lro_record.size(), 4000u);
@@ -551,7 +561,7 @@ TEST_F(AccumulatorTest, LRO_Processes_MaxAccumulatorJumboFrame_7KB) {
 
 TEST(LROInvarianceTest, FragmentedVsLROCoalescedYieldsIdenticalJA3) {
     std::vector<uint16_t> ciphers = {0x1301, 0x1302, 0x1303, 0xc02c, 0xc030};
-    std::vector<uint8_t> extensions(3000, 0x05); // 3 KB payload
+    auto extensions = padding_extensions(3000); // 3 KB valid extension vector
     auto record = build_client_hello_record(ciphers, extensions);
 
     // 1. Process as single LRO-coalesced frame
@@ -590,7 +600,7 @@ TEST(LROInvarianceTest, FragmentedVsLROCoalescedYieldsIdenticalJA3) {
 // ============================================================
 
 TEST_F(AccumulatorTest, Tier2_EvictsFlowOnSequenceGap) {
-    auto tls_record = build_client_hello_record({0x1301, 0x1302}, std::vector<uint8_t>(400, 0xAA));
+    auto tls_record = build_client_hello_record({0x1301, 0x1302}, padding_extensions(400));
     
     size_t split = 200;
     std::vector<uint8_t> seg1(tls_record.begin(), tls_record.begin() + split);
@@ -611,7 +621,7 @@ TEST_F(AccumulatorTest, Tier2_EvictsFlowOnSequenceGap) {
 }
 
 TEST_F(AccumulatorTest, Tier2_HandlesDuplicateRetransmittedSegments) {
-    auto tls_record = build_client_hello_record({0x1301}, std::vector<uint8_t>(300, 0xBB));
+    auto tls_record = build_client_hello_record({0x1301}, padding_extensions(300));
     
     size_t split = 150;
     std::vector<uint8_t> seg1(tls_record.begin(), tls_record.begin() + split);

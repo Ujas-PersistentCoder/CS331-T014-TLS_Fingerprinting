@@ -32,6 +32,8 @@ add_library(tlsfp_phase2_lib STATIC
     src/accumulator.cpp
     src/capture.cpp
     src/parser.cpp
+    src/ech_parser.cpp
+    src/ech_analysis.cpp
     src/ja3.cpp
     src/ja4.cpp
     src/db.cpp
@@ -58,9 +60,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         $<$<CONFIG:Release>:-O3>
         $<$<CONFIG:Release>:-march=native>
         $<$<CONFIG:Debug>:-g3>
+    )
+    target_compile_options(tlsfp_phase2_lib PUBLIC
         $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
-    target_link_options(tlsfp_phase2_lib PRIVATE
+    # Static libraries do not link; propagate sanitizer runtime flags to consumers.
+    target_link_options(tlsfp_phase2_lib PUBLIC
         $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
 endif()
@@ -82,6 +87,12 @@ find_package(GTest REQUIRED)
 # Test Executable Target
 add_executable(unit_tests
     tests/test_fingerprints.cpp
+    tests/test_ech_parser.cpp
+    tests/test_ech_analysis.cpp
+)
+
+target_compile_definitions(unit_tests PRIVATE
+    TLSFP_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
 
 target_link_libraries(unit_tests

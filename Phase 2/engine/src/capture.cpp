@@ -1,5 +1,6 @@
 #include "tlsfp/capture.hpp"
 #include "tlsfp/parser.hpp"
+#include "tlsfp/ech_analysis.hpp"
 #include "tlsfp/ja3.hpp"
 #include "tlsfp/ja4.hpp"
 #include "tlsfp/db.hpp"
@@ -49,12 +50,71 @@ inline std::string to_hex(uint16_t val) {
     return std::string(buf);
 }
 
+template <typename T>
+std::string observed_number(const std::optional<T> &value) {
+    return value ? std::to_string(*value) : "<unknown>";
+}
+
+void print_parse_diagnostic(const FlowKey &key, const char *kind) {
+    char src[INET6_ADDRSTRLEN]{}, dst[INET6_ADDRSTRLEN]{};
+    const int family = key.ip_version == 4 ? AF_INET : AF_INET6;
+    inet_ntop(family, &key.src_ip, src, sizeof(src));
+    inet_ntop(family, &key.dst_ip, dst, sizeof(dst));
+    std::cout << "\n[" << kind << " diagnostic] " << src << ":" << ntohs(key.src_port)
+              << " -> " << dst << ":" << ntohs(key.dst_port)
+              << " (fingerprints suppressed)\n";
+}
+
+void print_ech_observation(const ClientHelloData &ch) {
+    std::cout << "   │  [V-ClientHello] status=" << parse_status_name(ch.parse_status)
+              << " (" << ch.parse_detail << ")\n"
+              << "   │  [V-OuterRandom] ";
+    if (ch.outer_random) {
+        for (uint8_t byte : *ch.outer_random) {
+            char hex[3];
+            std::snprintf(hex, sizeof(hex), "%02x", byte);
+            std::cout << hex;
+        }
+    } else {
+        std::cout << "<unknown>";
+    }
+    std::cout << "\n   │  [V-ECH] presence="
+              << (!ch.ech.present ? "unknown" : (*ch.ech.present ? "present" : "absent"))
+              << " occurrences=" << ch.ech.occurrences.size() << "\n";
+    for (size_t i = 0; i < ch.ech.occurrences.size(); ++i) {
+        const auto &extension = ch.ech.occurrences[i];
+        std::cout << "   │  [V-ECH #" << i + 1 << "] status=" << parse_status_name(extension.status)
+                  << " (" << extension.detail << ") variant=" << observed_number(extension.variant)
+                  << " kdf_id=" << observed_number(extension.kdf_id)
+                  << " aead_id=" << observed_number(extension.aead_id)
+                  << " config_id=" << observed_number(extension.config_id)
+                  << " enc_length=" << observed_number(extension.enc_length)
+                  << " ciphertext_length=" << observed_number(extension.payload_length) << "\n";
+    }
+    std::cout << "   │  [V-ECH findings]";
+    if (ch.ech.findings == 0) std::cout << " none";
+    for (const auto &finding : {
+             std::pair{DuplicateEch, "duplicate_ech"},
+             std::pair{ForbiddenOuterExtensions, "forbidden_outer_extensions"},
+             std::pair{ExternalInnerMarker, "external_inner_marker"},
+             std::pair{ExportOnlyAead, "export_only_aead"},
+             std::pair{EmptyEncContextUnknown, "empty_enc_context_unknown"},
+             std::pair{EmptyEncInInitialHello, "empty_enc_in_initial_hello"}}) {
+        if (ch.ech.findings & finding.first) std::cout << " " << finding.second;
+    }
+    std::cout << "\n";
+    if (ch.ech.present == true) {
+        std::cout << "   │  [V-ECH interpretation] offer_type=unknown acceptance=unverified\n";
+    }
+}
+
 void print_verbose_client(const ClientHelloData &ch, const JA3Fingerprint &ja3, const JA4Fingerprint &ja4) {
+    print_ech_observation(ch);
     std::cout << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-Version]     " << Color::RESET
               << Color::YELLOW << to_hex(ch.client_version) << Color::RESET << "\n"
               << Color::GRAY << "   │  " << Color::RESET
-              << Color::CYAN << "[V-SNI]         " << Color::RESET
+              << Color::CYAN << "[V-Outer SNI]   " << Color::RESET
               << (ch.has_sni ? Color::GREEN : Color::GRAY)
               << (ch.has_sni ? ch.sni : std::string_view("<none>"))
               << Color::RESET << "\n"
@@ -174,6 +234,13 @@ CaptureEngine::CaptureEngine(CaptureOptions options)
     accumulator_ = std::make_unique<TwoTierAccumulator>(
         [this](const FlowKey &key, const uint8_t *record, size_t len) {
             this->process_assembled_handshake(key, record, len);
+        },
+        [this](const FlowKey &key) {
+            if (options_.verbose && !options_.quiet) {
+                // A short oversized-record header need not reveal its hello type.
+                print_parse_diagnostic(key, "TLS record");
+                std::cout << "   │  status=unsupported (TLS record exceeds 8192-byte supported limit)\n";
+            }
         }
     );
 }
@@ -413,7 +480,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 void CaptureEngine::process_assembled_handshake(const FlowKey &key, 
                                                 const uint8_t *record_data, 
                                                 size_t record_len) {
-    if (record_len < 9 || record_data[0] != TLS_RECORD_HANDSHAKE) return;
+    if (record_len < 6 || record_data[0] != TLS_RECORD_HANDSHAKE) return;
 
     uint8_t hs_type = record_data[5]; // Byte 0..4 = Record Header, Byte 5 = Handshake Type
 
@@ -458,6 +525,9 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
             }
+        } else if (options_.verbose && !options_.quiet) {
+            print_parse_diagnostic(key, "ClientHello");
+            print_ech_observation(impl_->client_scratchpad);
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {

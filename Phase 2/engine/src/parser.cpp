@@ -1,21 +1,31 @@
 #include "tlsfp/parser.hpp"
+#include "tlsfp/ech_analysis.hpp"
 #include <algorithm>
 
 namespace tlsfp {
 
 namespace {
 
-void parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
-    while (ext_reader.has_bytes(4)) {
+bool parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
+    while (ext_reader.remaining() != 0) {
         uint16_t ext_type = 0;
         uint16_t ext_len = 0;
         if (!ext_reader.read_u16_be(ext_type) || !ext_reader.read_u16_be(ext_len)) {
-            break;
+            return false;
         }
 
+        // A complete type/length header proves presence even if its body is bad.
+        if (ext_type == ECH_EXTENSION) out.ech.present = true;
+        if (ext_type == ECH_OUTER_EXTENSIONS) out.ech.has_outer_extensions = true;
         auto sub_opt = ext_reader.spawn_sub_reader(ext_len);
         if (!sub_opt) {
-            break; // Truncated extension payload
+            if (ext_type == ECH_EXTENSION) {
+                EchExtension extension;
+                extension.status = ParseStatus::Malformed;
+                extension.detail = "extension length exceeds complete ClientHello";
+                out.ech.occurrences.push_back(extension);
+            }
+            return false;
         }
         ByteReader &reader = *sub_opt;
 
@@ -25,6 +35,9 @@ void parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
         }
 
         switch (ext_type) {
+            case ECH_EXTENSION:
+                out.ech.occurrences.push_back(parse_ech_extension(reader));
+                break;
             // Extension 0x0000: Server Name Indication (SNI)
             case 0x0000: {
                 uint16_t list_len = 0;
@@ -130,6 +143,7 @@ void parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
                 break;
         }
     }
+    return true;
 }
 
 void parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
@@ -184,6 +198,15 @@ void parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
 
 bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloData &out) {
     out.clear();
+    const auto fail = [&out](ParseStatus status, const char *detail) {
+        out.parse_status = status;
+        out.parse_detail = detail;
+        analyze_ech(out.ech);
+        return false;
+    };
+    if (record == nullptr || record_len < 5) {
+        return fail(ParseStatus::Incomplete, "missing TLS record header");
+    }
     ByteReader root_reader{record, record_len};
 
     // 1. Record Header (5 bytes)
@@ -192,43 +215,61 @@ bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloDat
     uint16_t rec_len = 0;
     if (!root_reader.read_u8(rec_type) || rec_type != TLS_RECORD_HANDSHAKE ||
         !root_reader.read_u16_be(rec_ver) || !root_reader.read_u16_be(rec_len) ||
-        !root_reader.has_bytes(rec_len)) {
-        return false;
+        (rec_ver >> 8) != 3 || (rec_ver & 0xff) > 4) {
+        return fail(ParseStatus::Malformed, "invalid handshake record header");
+    }
+    // Bound the declared record, not a coalesced caller buffer containing other records.
+    if (size_t{5} + rec_len > ACCUMULATOR_BUFFER_SIZE) {
+        return fail(ParseStatus::Unsupported, "TLS record exceeds 8192-byte supported limit");
+    }
+    if (!root_reader.has_bytes(rec_len)) {
+        return fail(ParseStatus::Incomplete, "missing TLS record bytes");
     }
 
     // Isolate reader strictly to declared record length to enforce boundary
     auto rec_sub_opt = root_reader.spawn_sub_reader(rec_len);
-    if (!rec_sub_opt) return false;
     ByteReader &reader = *rec_sub_opt;
 
     // 2. Handshake Header (4 bytes)
     uint8_t hs_type = 0;
     uint32_t hs_len = 0;
-    if (!reader.read_u8(hs_type) || hs_type != TLS_HANDSHAKE_CLIENT_HELLO ||
-        !reader.read_u24_be(hs_len) || !reader.has_bytes(hs_len)) {
-        return false;
+    if (!reader.read_u8(hs_type)) {
+        return fail(ParseStatus::Malformed, "empty handshake record");
+    }
+    if (hs_type != TLS_HANDSHAKE_CLIENT_HELLO) {
+        return fail(ParseStatus::Malformed, "expected ClientHello handshake type");
+    }
+    if (!reader.read_u24_be(hs_len) || !reader.has_bytes(hs_len)) {
+        return fail(ParseStatus::Unsupported, "ClientHello spans TLS records");
     }
 
     auto hs_sub_opt = reader.spawn_sub_reader(hs_len);
-    if (!hs_sub_opt) return false;
     ByteReader &hs_reader = *hs_sub_opt;
 
     // 3. Client Version (2 bytes)
-    if (!hs_reader.read_u16_be(out.client_version)) return false;
+    if (!hs_reader.read_u16_be(out.client_version)) {
+        return fail(ParseStatus::Malformed, "missing ClientHello version");
+    }
 
     // 4. Random (32 bytes)
-    if (!hs_reader.skip(32)) return false;
+    const uint8_t *random = nullptr;
+    if (!hs_reader.read_bytes(32, random)) {
+        return fail(ParseStatus::Malformed, "missing ClientHello random");
+    }
+    out.outer_random.emplace();
+    std::copy_n(random, 32, out.outer_random->begin());
 
     // 5. Session ID
     uint8_t session_id_len = 0;
-    if (!hs_reader.read_u8(session_id_len) || !hs_reader.skip(session_id_len)) {
-        return false;
+    if (!hs_reader.read_u8(session_id_len) || session_id_len > 32 || !hs_reader.skip(session_id_len)) {
+        return fail(ParseStatus::Malformed, "invalid session ID vector");
     }
 
     // 6. Cipher Suites (array of 2-byte values with GREASE filtering)
     uint16_t ciphers_len = 0;
-    if (!hs_reader.read_u16_be(ciphers_len) || (ciphers_len % 2 != 0) || !hs_reader.has_bytes(ciphers_len)) {
-        return false;
+    if (!hs_reader.read_u16_be(ciphers_len) || ciphers_len == 0 ||
+        (ciphers_len % 2 != 0) || !hs_reader.has_bytes(ciphers_len)) {
+        return fail(ParseStatus::Malformed, "invalid cipher suites vector");
     }
 
     size_t cipher_count = ciphers_len / 2;
@@ -243,23 +284,29 @@ bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloDat
 
     // 7. Compression Methods
     uint8_t comp_len = 0;
-    if (!hs_reader.read_u8(comp_len) || !hs_reader.skip(comp_len)) {
-        return false;
+    if (!hs_reader.read_u8(comp_len) || comp_len == 0 || !hs_reader.skip(comp_len)) {
+        return fail(ParseStatus::Malformed, "invalid compression methods vector");
     }
 
     // 8. Extensions Vector
-    if (hs_reader.has_bytes(2)) {
+    // TLS <=1.2 permits an omitted extension vector. A partial length or a
+    // contradictory vector inside a complete hello is malformed, not capture loss.
+    if (hs_reader.remaining() != 0) {
         uint16_t exts_len = 0;
-        if (!hs_reader.read_u16_be(exts_len) || !hs_reader.has_bytes(exts_len)) {
-            return false;
+        if (!hs_reader.read_u16_be(exts_len) || hs_reader.remaining() != exts_len) {
+            return fail(ParseStatus::Malformed, "extension vector does not consume ClientHello");
         }
 
         auto ext_sub_opt = hs_reader.spawn_sub_reader(exts_len);
-        if (ext_sub_opt) {
-            parse_client_extensions(*ext_sub_opt, out);
+        if (!parse_client_extensions(*ext_sub_opt, out)) {
+            return fail(ParseStatus::Malformed, "invalid extension header or body length");
         }
     }
 
+    out.parse_status = ParseStatus::Complete;
+    out.parse_detail = "complete ClientHello framing";
+    if (!out.ech.present.has_value()) out.ech.present = false;
+    analyze_ech(out.ech);
     return true;
 }
 

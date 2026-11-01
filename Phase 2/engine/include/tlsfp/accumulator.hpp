@@ -36,9 +36,10 @@ public:
     using HandshakeCallback = std::function<void(const FlowKey &key, 
                                                  const uint8_t *record_data, 
                                                  size_t record_len)>;
+    using RecordLimitCallback = std::function<void(const FlowKey &key)>;
 
-    explicit TwoTierAccumulator(HandshakeCallback callback) 
-        : on_handshake_ready_(std::move(callback)) {}
+    explicit TwoTierAccumulator(HandshakeCallback callback, RecordLimitCallback limit_callback = {})
+        : on_handshake_ready_(std::move(callback)), on_record_limit_(std::move(limit_callback)) {}
 
     /**
      * @brief Ingest a raw TCP segment for a given 4-tuple flow.
@@ -65,6 +66,7 @@ public:
 
 private:
     HandshakeCallback on_handshake_ready_;
+    RecordLimitCallback on_record_limit_;
     std::unordered_map<FlowKey, FragmentedHandshake, FlowHash> active_flows_;
     uint64_t packet_counter_{0};
 };

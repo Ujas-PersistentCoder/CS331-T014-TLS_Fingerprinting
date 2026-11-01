@@ -67,7 +67,12 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
                     }
                     uint16_t tls_rec_len = (static_cast<uint16_t>(flow.buffer[3]) << 8) | flow.buffer[4];
                     size_t total_record_len = 5 + tls_rec_len;
-                    if (tls_rec_len < 4 || total_record_len > ACCUMULATOR_BUFFER_SIZE) {
+                    if (total_record_len > ACCUMULATOR_BUFFER_SIZE) {
+                        if (on_record_limit_) on_record_limit_(key);
+                        active_flows_.erase(it);
+                        return;
+                    }
+                    if (tls_rec_len == 0) {
                         active_flows_.erase(it);
                         return;
                     }
@@ -120,8 +125,14 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
     uint16_t tls_rec_len = (static_cast<uint16_t>(payload[3]) << 8) | payload[4];
     size_t total_record_len = 5 + tls_rec_len;
 
-    // Minimum handshake header is 4 bytes; max RFC record length is 16384 bytes
-    if (tls_rec_len < 4 || total_record_len > MAX_TLS_RECORD_LENGTH) {
+    // Apply the same retained bound to fast, segmented, and partial-header paths.
+    // A handshake header itself can span records; deliver its first byte so the
+    // hello parser can report that unsupported case instead of silently skipping it.
+    if (total_record_len > ACCUMULATOR_BUFFER_SIZE) {
+        if (on_record_limit_) on_record_limit_(key);
+        return;
+    }
+    if (tls_rec_len == 0) {
         return;
     }
 
@@ -138,11 +149,6 @@ void TwoTierAccumulator::process_segment(const FlowKey &key,
     // ─────────────────────────────────────────────────────────────────────
     // TIER 2: SLOW PATH (Multi-packet handshake, GRO-off, or PQ-TLS)
     // ─────────────────────────────────────────────────────────────────────
-    if (total_record_len > ACCUMULATOR_BUFFER_SIZE) {
-        // Guard against pathologically oversized records (> 8 KB)
-        return;
-    }
-
     FragmentedHandshake &flow = active_flows_[key];
     flow.total_expected   = total_record_len;
     flow.base_seq         = seq;
