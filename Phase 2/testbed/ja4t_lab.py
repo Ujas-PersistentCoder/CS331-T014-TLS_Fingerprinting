@@ -10,6 +10,7 @@ the C++ engine over both must raise exactly the expected verdict per flow:
     injected_hello          SYN TTL 120, ClientHello TTL 47       -> TTL_MISMATCH
     forged_windows_syn      Windows options sent with Linux TTL   -> STACK_ANOMALY
     mid_flow                ClientHello without a captured SYN    -> no JA4T
+    expired_syn             ClientHello 30+ seconds after SYN      -> no JA4T
 
 Usage:
     python ja4t_lab.py [--out DIR] [--engine PATH/TO/tlsfp_phase2]
@@ -46,6 +47,7 @@ SCENARIOS = [
     ("injected_hello",      50003, WINDOWS_SYN, 120,  47, "TTL_MISMATCH"),
     ("forged_windows_syn",  50004, WINDOWS_SYN,  57,  57, "STACK_ANOMALY"),
     ("mid_flow",            50005, None,          0, 120, "SYN not captured"),
+    ("expired_syn",         50006, WINDOWS_SYN, 120, 120, "SYN not captured"),
 ]
 ALERT_TAGS = ("IMPERSONATION_MISMATCH", "TTL_MISMATCH", "STACK_ANOMALY")
 
@@ -92,9 +94,9 @@ def build_pcap(path: Path, hello: bytes) -> None:
             packets.append(syn)
         ch = Ether() / IP(src=CLIENT_IP, dst=SERVER_IP, ttl=hello_ttl) / TCP(
             sport=port, dport=443, flags="PA", seq=isn + 1, ack=1, window=1026) / Raw(hello)
-        ch.time = t + 0.05
+        ch.time = t + (31.0 if name == "expired_syn" else 0.05)
         packets.append(ch)
-        t += 1.0
+        t += 32.0 if name == "expired_syn" else 1.0
     wrpcap(str(path), packets)
 
 

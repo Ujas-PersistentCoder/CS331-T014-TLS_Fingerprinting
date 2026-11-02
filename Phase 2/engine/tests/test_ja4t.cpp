@@ -29,6 +29,7 @@ std::vector<uint8_t> tcp_header(uint16_t window, std::initializer_list<uint8_t> 
     hdr.insert(hdr.end(), options);
     while (hdr.size() % 4 != 0) hdr.push_back(0);
     hdr[12] = static_cast<uint8_t>((hdr.size() / 4) << 4);
+    hdr[13] = TCP_FLAG_SYN;
     return hdr;
 }
 
@@ -63,8 +64,25 @@ int main() {
              "64240_2-4-8-1-3_1460_7", "Linux default SYN");
 
     // --- Robustness ---
-    check_eq(compute_ja4t(parse(tcp_header(1024, {2, 4, 0x05, 0xb4, 3, 0}), 64)),
-             "1024_2-3_1460_00", "Malformed zero-length option stops the walk");
+    TcpSynData malformed = parse(tcp_header(64240, WINDOWS_OPTS), 128);
+    auto malformed_header = tcp_header(1024, {2, 4, 0x05, 0xb4, 3, 0});
+    check(!parse_tcp_syn(malformed_header.data(), malformed_header.size(), 64, malformed),
+          "Rejects a malformed zero-length option");
+    check(compute_ja4t(malformed) == "0_00_00_00", "Invalid input clears a previous parse result");
+
+    auto non_syn = tcp_header(1024, {2, 4, 0x05, 0xb4});
+    non_syn[13] = 0;
+    check(!parse_tcp_syn(non_syn.data(), non_syn.size(), 64, malformed), "Rejects a non-SYN TCP header");
+
+    auto invalid_offset = tcp_header(1024, {});
+    invalid_offset[12] = 0x40;
+    check(!parse_tcp_syn(invalid_offset.data(), invalid_offset.size(), 64, malformed),
+          "Rejects a TCP data offset that does not match the header length");
+
+    auto syn_ack = tcp_header(1024, {});
+    syn_ack[13] |= TCP_FLAG_ACK;
+    check(parse_tcp_syn(syn_ack.data(), syn_ack.size(), 64, malformed), "Accepts a SYN-ACK header");
+
     TcpSynData short_hdr;
     check(!parse_tcp_syn(std::vector<uint8_t>(10, 0).data(), 10, 64, short_hdr), "Rejects header < 20 bytes");
 
@@ -72,6 +90,7 @@ int main() {
     check(estimate_initial_ttl(64) == 64 && estimate_initial_ttl(51) == 64, "TTL <= 64 -> 64");
     check(estimate_initial_ttl(117) == 128 && estimate_initial_ttl(128) == 128, "TTL 65..128 -> 128");
     check(estimate_initial_ttl(240) == 255, "TTL > 128 -> 255");
+    check(estimate_initial_ttl(0) == 0, "TTL 0 remains unknown");
 
     // --- OS inference ---
     OsInference win = infer_os(parse(tcp_header(64240, WINDOWS_OPTS), 117));
@@ -83,6 +102,9 @@ int main() {
 
     OsInference forged = infer_os(parse(tcp_header(64240, WINDOWS_OPTS), 64));
     check(forged.stack_anomaly && forged.family == OsFamily::Unknown, "Windows layout + TTL 64 -> STACK_ANOMALY");
+    OsInference missing_ttl = infer_os(parse(tcp_header(64240, WINDOWS_OPTS), 0));
+    check(missing_ttl.family == OsFamily::Windows && !missing_ttl.stack_anomaly,
+          "Known TCP layout remains usable when TTL is unknown");
 
     // --- Catalog labels & compatibility ---
     check(os_family_from_label("Windows 11") == OsFamily::Windows, "label 'Windows 11'");

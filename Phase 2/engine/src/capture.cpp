@@ -10,6 +10,7 @@
 #include <cstring>
 #include <optional>
 #include <unordered_map>
+#include <ctime>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
@@ -171,7 +172,7 @@ void print_alert(const std::string &color, const char *tag, const std::string &m
 // A SYN or SYN-ACK held until the TLS Hello on the same directional 4-tuple arrives
 struct SynObservation {
     TcpSynData syn;
-    time_t seen{0};
+    std::time_t seen{0};
 };
 
 } // anonymous namespace
@@ -184,40 +185,57 @@ struct CaptureEngine::Impl {
     // JA4T state: SYNs keyed client->server and SYN-ACKs keyed server->client, so each
     // is found under the same FlowKey as the ClientHello / ServerHello it precedes.
     std::unordered_map<FlowKey, SynObservation, FlowHash> syn_table;
-    uint64_t syn_counter{0};
+    std::time_t last_syn_cleanup{0};
+    bool has_syn_cleanup_time{false};
     // TTL of the packet currently fed to the accumulator. Its callback runs synchronously,
     // so this is the TTL of the segment that completed the Hello.
     uint8_t current_ttl{0};
+    std::time_t current_packet_time{0};
 
     void observe_syn(const FlowKey &key, const uint8_t *tcp_hdr, size_t tcp_hdr_len,
-                     uint8_t ip_ttl, time_t now) {
-        if ((++syn_counter & 0x03FF) == 0) { // Every 1024 SYNs
-            evict_stale_syns(now);
-        }
+                     uint8_t ip_ttl, std::time_t now) {
+        TcpSynData syn;
+        if (!parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, syn)) return;
         if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
             return; // Flooded with fresh SYNs: fail open, this flow just gets no JA4T
         }
         SynObservation &obs = syn_table[key];
-        parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, obs.syn);
+        obs.syn = syn;
         obs.seen = now;
     }
 
-    std::optional<SynObservation> take_syn(const FlowKey &key) {
+    std::optional<SynObservation> take_syn(const FlowKey &key, std::time_t now) {
         auto it = syn_table.find(key);
         if (it == syn_table.end()) return std::nullopt;
+        if (now < it->second.seen ||
+            now - it->second.seen >= static_cast<std::time_t>(SYN_TIMEOUT_SECONDS)) {
+            syn_table.erase(it);
+            return std::nullopt;
+        }
         SynObservation obs = it->second;
         syn_table.erase(it);
         return obs;
     }
 
-    void evict_stale_syns(time_t now) {
+    void evict_stale_syns(std::time_t now) {
         for (auto it = syn_table.begin(); it != syn_table.end(); ) {
-            if (now > it->second.seen && (now - it->second.seen) > SYN_TIMEOUT_SECONDS) {
+            if (now >= it->second.seen &&
+                now - it->second.seen >= static_cast<std::time_t>(SYN_TIMEOUT_SECONDS)) {
                 it = syn_table.erase(it);
             } else {
                 ++it;
             }
         }
+    }
+
+    void cleanup_stale_syns_if_due(std::time_t now) {
+        if (has_syn_cleanup_time &&
+            (now < last_syn_cleanup || now - last_syn_cleanup < 1)) {
+            return;
+        }
+        evict_stale_syns(now);
+        last_syn_cleanup = now;
+        has_syn_cleanup_time = true;
     }
 
     bool lookup(FingerprintKind kind, const std::string &hash, FingerprintRecord &record) {
@@ -234,7 +252,7 @@ struct CaptureEngine::Impl {
         std::cout << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << tag << Color::RESET;
         if (!obs) {
             std::cout << Color::GRAY << "<" << (kind == FingerprintKind::JA4T ? "SYN" : "SYN-ACK")
-                      << " not captured: connection predates capture start>" << Color::RESET << "\n";
+                      << " not captured or correlation expired>" << Color::RESET << "\n";
             return 0;
         }
 
@@ -465,6 +483,7 @@ bool CaptureEngine::run() {
 
 void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_t *packet) {
     stats_.total_packets++;
+    impl_->cleanup_stale_syns_if_due(pkthdr->ts.tv_sec);
 
     size_t link_hdr_len = 0;
     uint16_t ethertype = 0;
@@ -578,7 +597,11 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     uint32_t seq = ntohl(raw_seq);
 
     size_t tcp_hdr_len = static_cast<size_t>(tcp_ptr[12] >> 4) * 4;
-    if (tcp_hdr_len < 20 || pkthdr->caplen < link_hdr_len + ip_hdr_len + tcp_hdr_len) return;
+    if (tcp_hdr_len < 20 ||
+        ip_total_len < ip_hdr_len + tcp_hdr_len ||
+        pkthdr->caplen < link_hdr_len + ip_hdr_len + tcp_hdr_len) {
+        return;
+    }
 
     // JA4T / JA4TS: record the kernel-built SYN and SYN-ACK before the payload-less early exit
     const uint8_t tcp_flags = tcp_ptr[13];
@@ -615,6 +638,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 
     // Feed to Two-Tier Accumulator
     impl_->current_ttl = ip_ttl;
+    impl_->current_packet_time = pkthdr->ts.tv_sec;
     accumulator_->process_segment(key, seq, payload, payload_len, pkthdr->ts.tv_sec);
 }
 
@@ -630,7 +654,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             stats_.client_hellos++;
             JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
-            std::optional<SynObservation> syn = impl_->take_syn(key);
+            std::optional<SynObservation> syn = impl_->take_syn(key, impl_->current_packet_time);
 
             if (options_.quiet) return;
 
@@ -677,7 +701,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             stats_.server_hellos++;
             JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
-            std::optional<SynObservation> synack = impl_->take_syn(key);
+            std::optional<SynObservation> synack = impl_->take_syn(key, impl_->current_packet_time);
 
             if (options_.quiet) return;
 

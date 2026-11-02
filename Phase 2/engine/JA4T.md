@@ -19,7 +19,7 @@ Layer note: the window and options are L4 (TCP header). The TTL used alongside t
 
 ## How the engine uses it
 
-1. `capture.cpp` records every SYN and SYN-ACK in a bounded table, before the "no payload" early exit. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. Limits: 30 s timeout, 64 K entries; under a SYN flood the engine fails open, and new flows get no JA4T.
+1. `capture.cpp` records valid SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. Entries expire after 30 s; the table is capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
 2. When the Hello arrives, the engine takes the matching entry and prints `JA4T:` / `JA4TS:` with a catalog label or an inferred OS, plus the TTL and hop count.
 3. `ja4t.cpp: infer_os()` gives a p0f-style verdict from the option layout (Linux / Apple / Windows defaults) and the initial-TTL estimate.
 
@@ -59,4 +59,5 @@ python "Phase 2/testbed/ja4t_lab.py" --engine build/tlsfp_phase2   # end-to-end 
 - **SYN spoofing is possible, just more expensive.** An attacker with root can set the TTL (`sysctl net.ipv4.ip_default_ttl=128`) and craft SYNs with raw sockets or a userspace TCP stack. JA4T raises the cost; it is not proof.
 - **Proxies, VPNs and NAT64 terminate TCP.** The SYN then belongs to the proxy, not the client. MSS shrinks on tunnels (1380/1420/1436 in `code/pcaps`), so `infer_os` ignores MSS.
 - **No SYN, no JA4T.** Connections already open when capture starts print `SYN not captured`.
+- **Unknown TTL is not guessed.** A zero TTL/Hop Limit does not produce an OS inference from TTL alone; a recognized TCP option layout may still identify the stack.
 - **License.** JA4T/JA4TS are under the FoxIO License 1.1, which permits academic use. JA4 itself is BSD-3.

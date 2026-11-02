@@ -60,39 +60,62 @@ inline bool is_unix_family(OsFamily f) noexcept {
 
 bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, TcpSynData &out) {
     out.clear();
-    if (tcp_hdr == nullptr || tcp_hdr_len < 20) return false;
+    if (tcp_hdr == nullptr || tcp_hdr_len < 20 || tcp_hdr_len > 60) return false;
+    if (static_cast<size_t>(tcp_hdr[12] >> 4) * 4 != tcp_hdr_len ||
+        (tcp_hdr[13] & TCP_FLAG_SYN) == 0) {
+        return false;
+    }
 
-    out.window_size = static_cast<uint16_t>((tcp_hdr[14] << 8) | tcp_hdr[15]);
-    out.ip_ttl = ip_ttl;
+    TcpSynData parsed;
+    parsed.window_size = static_cast<uint16_t>((tcp_hdr[14] << 8) | tcp_hdr[15]);
+    parsed.ip_ttl = ip_ttl;
 
     const uint8_t *opts = tcp_hdr + 20;
     const size_t opts_len = std::min(tcp_hdr_len - 20, TCP_MAX_OPTIONS_LEN);
 
     size_t i = 0;
-    while (i < opts_len && out.option_count < TCP_MAX_OPTIONS_LEN) {
+    while (i < opts_len && parsed.option_count < TCP_MAX_OPTIONS_LEN) {
         const uint8_t kind = opts[i];
-        out.option_kinds[out.option_count++] = kind;
+        parsed.option_kinds[parsed.option_count++] = kind;
 
         // EOL and NOP are single bytes. EOL padding is kept byte-for-byte to match
         // FoxIO's reference output (macOS SYN: 65535_2-1-3-1-1-8-4-0-0_1460_6).
-        if (kind == TCP_OPT_EOL || kind == TCP_OPT_NOP) {
+        if (kind == TCP_OPT_EOL) {
+            ++i;
+            while (i < opts_len) {
+                if (opts[i] != TCP_OPT_EOL || parsed.option_count >= TCP_MAX_OPTIONS_LEN) return false;
+                parsed.option_kinds[parsed.option_count++] = TCP_OPT_EOL;
+                ++i;
+            }
+            break;
+        }
+        if (kind == TCP_OPT_NOP) {
             ++i;
             continue;
         }
 
-        if (i + 1 >= opts_len) break;           // Truncated TLV: kind recorded, no length byte
+        if (i + 1 >= opts_len) return false;
         const uint8_t len = opts[i + 1];
-        if (len < 2 || i + len > opts_len) break; // Malformed length: stop walking
+        if (len < 2 || len > opts_len - i) return false;
+
+        if ((kind == TCP_OPT_MSS && len != 4) ||
+            (kind == TCP_OPT_WINDOW_SCALE && len != 3) ||
+            (kind == 4 && len != 2) ||
+            (kind == 8 && len != 10)) {
+            return false;
+        }
 
         if (kind == TCP_OPT_MSS && len == 4) {
-            out.has_mss = true;
-            out.mss = static_cast<uint16_t>((opts[i + 2] << 8) | opts[i + 3]);
+            parsed.has_mss = true;
+            parsed.mss = static_cast<uint16_t>((opts[i + 2] << 8) | opts[i + 3]);
         } else if (kind == TCP_OPT_WINDOW_SCALE && len == 3) {
-            out.has_window_scale = true;
-            out.window_scale = opts[i + 2];
+            parsed.has_window_scale = true;
+            parsed.window_scale = opts[i + 2];
         }
         i += len;
     }
+
+    out = parsed;
     return true;
 }
 
@@ -127,6 +150,7 @@ std::string compute_ja4t(const TcpSynData &syn) {
 }
 
 uint8_t estimate_initial_ttl(uint8_t observed_ttl) noexcept {
+    if (observed_ttl == 0) return 0;
     if (observed_ttl <= 64) return 64;
     if (observed_ttl <= 128) return 128;
     return 255;
@@ -141,6 +165,8 @@ OsInference infer_os(const TcpSynData &syn) noexcept {
 
     if (inf.layout_family == OsFamily::Unknown) {
         inf.family = inf.ttl_family;
+    } else if (inf.ttl_family == OsFamily::Unknown) {
+        inf.family = inf.layout_family;
     } else if (os_families_compatible(inf.layout_family, inf.ttl_family)) {
         inf.family = inf.layout_family;
     } else {
