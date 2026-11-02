@@ -27,6 +27,7 @@ void print_usage(const char *prog) {
               << "  -v               Enable verbose dissection of TLS handshake fields\n"
               << "  -q               Quiet / benchmark mode (suppress output, measure pps)\n"
               << "  -u               Interactively prompt to label unknown fingerprints\n"
+              << "  -T               Toggle JA4T transport layer fingerprinting (default: enabled)\n"
               << "  -c <catalog>     Load an extra catalog JSON (seed schema, e.g. ja4t / expected_os lab records)\n"
               << "  -h               Show this help message and exit\n";
 }
@@ -38,8 +39,11 @@ int main(int argc, char *argv[]) {
     options.bpf_filter = "tcp";
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:i:f:c:vquh")) != -1) {
+    while ((opt = getopt(argc, argv, "r:i:f:c:vquhT")) != -1) {
         switch (opt) {
+            case 'T':
+                options.enable_ja4t = !options.enable_ja4t;
+                break;
             case 'r':
                 options.read_filename = optarg;
                 break;

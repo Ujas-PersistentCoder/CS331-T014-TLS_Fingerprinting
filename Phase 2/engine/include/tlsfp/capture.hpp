@@ -17,6 +17,7 @@ struct CaptureOptions {
     bool verbose{false};
     bool quiet{false};
     bool prompt_unknown{false};
+    bool enable_ja4t{true};       // Track TCP SYN/SYN-ACK options and fingerprint transport layer
     std::string seed_filename{"code/db/seed_fingerprints.json"};
     std::string manifest_filename{"code/db/capture_manifest.json"};
     std::string legacy_filename{"code/python/fingerprints.json"};

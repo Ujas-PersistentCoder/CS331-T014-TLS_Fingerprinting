@@ -605,7 +605,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 
     // JA4T / JA4TS: record the kernel-built SYN and SYN-ACK before the payload-less early exit
     const uint8_t tcp_flags = tcp_ptr[13];
-    if (tcp_flags & TCP_FLAG_SYN) {
+    if (options_.enable_ja4t && (tcp_flags & TCP_FLAG_SYN)) {
         if (tcp_flags & TCP_FLAG_ACK) {
             stats_.tcp_synacks++;
         } else {
