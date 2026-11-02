@@ -40,7 +40,7 @@ struct ClientHelloData {
     std::string_view sni;        // Zero-copy view into packet buffer
     std::string_view first_alpn; // First non-GREASE ALPN protocol
 
-    PqtlsClientObservation pqtls; // PQ-TLS key exchange facts (see pqtls_parser.hpp)
+    PqtlsClientObservation pqtls; // PQ-TLS key exchange observation
 
     void clear() noexcept {
         client_version = 0;
@@ -67,7 +67,7 @@ struct ServerHelloData {
     std::vector<uint16_t> extensions;
     std::string_view first_alpn;
 
-    PqtlsServerObservation pqtls; // PQ-TLS key exchange facts (see pqtls_parser.hpp)
+    PqtlsServerObservation pqtls; // PQ-TLS key exchange observation
 
     void clear() noexcept {
         server_version = 0;

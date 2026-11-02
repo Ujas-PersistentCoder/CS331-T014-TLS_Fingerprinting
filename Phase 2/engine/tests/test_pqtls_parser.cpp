@@ -1,22 +1,21 @@
-// Tests for pqtls_parser.cpp (the OBSERVE part of PQ-TLS).
-//
-// How it works: we build small fake hellos byte by byte (helpers in
-// fixtures/pqtls_fixtures.hpp), give them to the real parser
-// (parse_client_hello / parse_server_hello), and check what it found.
-// No pcap file is needed.
+// PQ-TLS observation tests (pqtls_parser.cpp), using hand-built records
+// from fixtures/pqtls_fixtures.hpp through parse_client_hello / parse_server_hello
 
 #include <gtest/gtest.h>
 
 #include "tlsfp/parser.hpp"
 #include "tlsfp/pqtls_parser.hpp"
+#include "tlsfp/pqtls_analysis.hpp"
 #include "fixtures/pqtls_fixtures.hpp"
 
 using namespace tlsfp;
 using namespace pqtls_fixture;
 
-// ---------- ClientHello: supported_groups and key_share ----------
+// ============================================================
+// CLIENTHELLO: SUPPORTED_GROUPS & KEY_SHARE
+// ============================================================
 
-// Like modern Chrome: GREASE first, then X25519MLKEM768, then x25519.
+// Chrome-style: GREASE, X25519MLKEM768, x25519
 TEST(PqtlsParserTest, ChromeLikeHybridHello) {
     Bytes groups = make_extension(0x000a, make_groups_body({0x2a2a, 0x11ec, 0x001d, 0x0017}));
     Bytes shares = make_extension(0x0033, make_key_share_body({{0x2a2a, 1}, {0x11ec, 1216}, {0x001d, 32}}));
@@ -26,18 +25,18 @@ TEST(PqtlsParserTest, ChromeLikeHybridHello) {
     ASSERT_TRUE(parse_client_hello(record.data(), record.size(), ch));
 
     EXPECT_EQ(ch.pqtls.pq_group, 0x11ec);
-    EXPECT_TRUE(ch.pqtls.pq_first_choice);   // GREASE does not count as first
+    EXPECT_TRUE(ch.pqtls.pq_first_choice);   // GREASE ignored for preference
 
     EXPECT_TRUE(ch.pqtls.has_key_share);
     EXPECT_TRUE(ch.pqtls.key_share_parsed);
-    ASSERT_EQ(ch.pqtls.key_share_groups.size(), 2u);   // GREASE entry left out
+    ASSERT_EQ(ch.pqtls.key_share_groups.size(), 2u);   // GREASE entry pruned
     EXPECT_EQ(ch.pqtls.key_share_groups[0], 0x11ec);
     EXPECT_EQ(ch.pqtls.key_share_lens[0], 1216);
     EXPECT_EQ(ch.pqtls.key_share_groups[1], 0x001d);
     EXPECT_EQ(ch.pqtls.key_share_lens[1], 32);
 }
 
-// Like curl or Python: only classical groups.
+// curl-style: classical groups only
 TEST(PqtlsParserTest, ClassicalHelloHasNoPQGroup) {
     Bytes groups = make_extension(0x000a, make_groups_body({0x001d, 0x0017, 0x0018}));
     Bytes shares = make_extension(0x0033, make_key_share_body({{0x001d, 32}}));
@@ -52,7 +51,7 @@ TEST(PqtlsParserTest, ClassicalHelloHasNoPQGroup) {
     EXPECT_EQ(ch.pqtls.key_share_groups[0], 0x001d);
 }
 
-// PQ group is in the list, but not first, and no PQ key was sent.
+// PQ listed second, classical key only
 TEST(PqtlsParserTest, PQListedButNotFirstAndNoPQKey) {
     Bytes groups = make_extension(0x000a, make_groups_body({0x001d, 0x11ec}));
     Bytes shares = make_extension(0x0033, make_key_share_body({{0x001d, 32}}));
@@ -64,15 +63,15 @@ TEST(PqtlsParserTest, PQListedButNotFirstAndNoPQKey) {
     EXPECT_EQ(ch.pqtls.pq_group, 0x11ec);
     EXPECT_FALSE(ch.pqtls.pq_first_choice);
     ASSERT_EQ(ch.pqtls.key_share_groups.size(), 1u);
-    EXPECT_EQ(ch.pqtls.key_share_groups[0], 0x001d);   // only the classical key was sent
+    EXPECT_EQ(ch.pqtls.key_share_groups[0], 0x001d);   // Classical key only
 }
 
-// The key length says 1216 but only 10 key bytes are really there.
+// Declared key_len 1216, only 10 bytes present
 TEST(PqtlsParserTest, KeyShareWithWrongLengthIsNotTrusted) {
     Bytes body;
-    add16(body, 4 + 10);        // list length
+    add16(body, 4 + 10);        // list_len
     add16(body, 0x11ec);        // group
-    add16(body, 1216);          // key length (a lie)
+    add16(body, 1216);          // key_len (overstated)
     body.insert(body.end(), 10, 0xAA);
     Bytes record = make_client_hello(make_extension(0x0033, body));
 
@@ -83,7 +82,7 @@ TEST(PqtlsParserTest, KeyShareWithWrongLengthIsNotTrusted) {
     EXPECT_FALSE(ch.pqtls.key_share_parsed);
 }
 
-// Values from one hello must not stay behind for the next hello.
+// clear() resets PQ state between hellos
 TEST(PqtlsParserTest, NothingLeftOverBetweenHellos) {
     Bytes pq_hello = make_client_hello(join(
         make_extension(0x000a, make_groups_body({0x11ec, 0x001d})),
@@ -103,21 +102,24 @@ TEST(PqtlsParserTest, NothingLeftOverBetweenHellos) {
     EXPECT_TRUE(ch.pqtls.key_share_lens.empty());
 }
 
-// find_pqtls_group() on its own, without a whole hello.
+// find_pqtls_group() unit check
 TEST(PqtlsParserTest, FindGroupDirectly) {
     PqtlsClientObservation obs;
-    find_pqtls_group({0x001d, 0x0017, 0x6399}, obs);
-    EXPECT_EQ(obs.pq_group, 0x6399);        // older Kyber draft group still counts
+    find_pqtls_group({0x000a}, {0x001d, 0x0017, 0x6399}, obs);
+    EXPECT_EQ(obs.pq_group, 0x6399);        // Kyber draft group recognized
     EXPECT_FALSE(obs.pq_first_choice);
+    EXPECT_FALSE(obs.duplicate_supported_groups);
 
     PqtlsClientObservation none;
-    find_pqtls_group({0x001d, 0x0017}, none);
+    find_pqtls_group({0x000a}, {0x001d, 0x0017}, none);
     EXPECT_EQ(none.pq_group, 0);
 }
 
-// ---------- ServerHello: key_share ----------
+// ============================================================
+// SERVERHELLO: KEY_SHARE
+// ============================================================
 
-// The server picks X25519MLKEM768 and sends its 1120 byte share.
+// Server selects X25519MLKEM768 (1120 B share)
 TEST(PqtlsParserTest, ServerPicksHybridGroup) {
     Bytes body;
     add16(body, 0x11ec);
@@ -131,9 +133,10 @@ TEST(PqtlsParserTest, ServerPicksHybridGroup) {
     EXPECT_EQ(sh.pqtls.selected_group, 0x11ec);
     EXPECT_EQ(sh.pqtls.server_share_len, 1120);
     EXPECT_FALSE(sh.pqtls.is_hrr);
+    EXPECT_TRUE(sh.pqtls.key_share_parsed);
 }
 
-// A TLS 1.2 style ServerHello has no key_share at all.
+// TLS 1.2-style ServerHello: no key_share
 TEST(PqtlsParserTest, ServerWithoutKeyShare) {
     Bytes record = make_server_hello(make_extension(0xff01, Bytes{0}));  // renegotiation_info
 
@@ -144,12 +147,14 @@ TEST(PqtlsParserTest, ServerWithoutKeyShare) {
     EXPECT_EQ(sh.pqtls.server_share_len, 0);
 }
 
-// ---------- HelloRetryRequest ----------
+// ============================================================
+// HELLORETRYREQUEST
+// ============================================================
 
-// An HRR: special random, and key_share holds only the group the server wants (no key).
+// HRR: fixed random, key_share carries selected group only
 TEST(PqtlsParserTest, HelloRetryRequestIsRecognised) {
     Bytes body;
-    add16(body, 0x0017);   // server asks for secp256r1
+    add16(body, 0x0017);   // Requested group: secp256r1
     Bytes record = make_server_hello(make_extension(0x0033, body), true);
 
     ServerHelloData sh;
@@ -158,13 +163,165 @@ TEST(PqtlsParserTest, HelloRetryRequestIsRecognised) {
     EXPECT_TRUE(sh.pqtls.is_hrr);
     EXPECT_EQ(sh.pqtls.selected_group, 0x0017);
     EXPECT_EQ(sh.pqtls.server_share_len, 0);
+    EXPECT_TRUE(sh.pqtls.key_share_parsed);   // Group-only layout is valid for HRR
 }
 
-// is_hrr_random() on its own: the right value and a nearly-right value.
+// is_hrr_random(): exact match vs one-byte difference
 TEST(PqtlsParserTest, HrrRandomCheck) {
     EXPECT_TRUE(is_hrr_random(HRR_RANDOM.data()));
 
     Bytes almost = HRR_RANDOM;
-    almost[31] = 0x00;   // change only the last byte
+    almost[31] = 0x00;   // Flip last byte
     EXPECT_FALSE(is_hrr_random(almost.data()));
+}
+
+// ============================================================
+// DUPLICATE EXTENSIONS (RFC 8446 Sec. 4.2)
+// ============================================================
+
+// Duplicate client key_share: first kept, flag set
+TEST(PqtlsParserTest, DuplicateClientKeyShareKeepsFirst) {
+    Bytes first = make_extension(0x0033, make_key_share_body({{0x11ec, 1216}}));
+    Bytes second = make_extension(0x0033, make_key_share_body({{0x001d, 32}}));
+    Bytes record = make_client_hello(join(first, second));
+
+    ClientHelloData ch;
+    ASSERT_TRUE(parse_client_hello(record.data(), record.size(), ch));
+
+    EXPECT_TRUE(ch.pqtls.duplicate_key_share);
+    ASSERT_EQ(ch.pqtls.key_share_groups.size(), 1u);   // First occurrence only
+    EXPECT_EQ(ch.pqtls.key_share_groups[0], 0x11ec);
+}
+
+// Duplicate supported_groups: flag set
+TEST(PqtlsParserTest, DuplicateSupportedGroupsIsFlagged) {
+    Bytes first = make_extension(0x000a, make_groups_body({0x11ec, 0x001d}));
+    Bytes second = make_extension(0x000a, make_groups_body({0x001d}));
+    Bytes record = make_client_hello(join(first, second));
+
+    ClientHelloData ch;
+    ASSERT_TRUE(parse_client_hello(record.data(), record.size(), ch));
+
+    EXPECT_TRUE(ch.pqtls.duplicate_supported_groups);
+    EXPECT_FALSE(ch.pqtls.duplicate_key_share);
+}
+
+// Duplicate server key_share: first kept, flag set
+TEST(PqtlsParserTest, DuplicateServerKeyShareKeepsFirst) {
+    Bytes body1;
+    add16(body1, 0x11ec);
+    add16(body1, 1120);
+    body1.insert(body1.end(), 1120, 0xBB);
+    Bytes body2;
+    add16(body2, 0x001d);
+    add16(body2, 32);
+    body2.insert(body2.end(), 32, 0xBB);
+    Bytes record = make_server_hello(join(make_extension(0x0033, body1), make_extension(0x0033, body2)));
+
+    ServerHelloData sh;
+    ASSERT_TRUE(parse_server_hello(record.data(), record.size(), sh));
+
+    EXPECT_TRUE(sh.pqtls.duplicate_key_share);
+    EXPECT_EQ(sh.pqtls.selected_group, 0x11ec);
+    EXPECT_EQ(sh.pqtls.server_share_len, 1120);
+}
+
+// No duplicate flags on a well-formed hello
+TEST(PqtlsParserTest, NormalHelloHasNoDuplicateFlags) {
+    Bytes record = make_client_hello(join(
+        make_extension(0x000a, make_groups_body({0x11ec, 0x001d})),
+        make_extension(0x0033, make_key_share_body({{0x11ec, 1216}, {0x001d, 32}}))));
+
+    ClientHelloData ch;
+    ASSERT_TRUE(parse_client_hello(record.data(), record.size(), ch));
+
+    EXPECT_FALSE(ch.pqtls.duplicate_key_share);
+    EXPECT_FALSE(ch.pqtls.duplicate_supported_groups);
+}
+
+// ============================================================
+// REGRESSION: KEY_SHARE FRAMING & LABEL CONSISTENCY
+// ============================================================
+
+// ServerHello declares 1120 B key, carries none
+TEST(PqtlsParserTest, ServerKeyShareDeclaredButMissingBytes) {
+    Bytes body;
+    add16(body, 0x11ec);
+    add16(body, 1120);          // Declared, no key bytes
+    Bytes record = make_server_hello(make_extension(0x0033, body));
+
+    ServerHelloData sh;
+    ASSERT_TRUE(parse_server_hello(record.data(), record.size(), sh));
+
+    EXPECT_TRUE(sh.pqtls.has_key_share);
+    EXPECT_FALSE(sh.pqtls.key_share_parsed);
+    EXPECT_NE(pqtls_server_check_text(sh.pqtls), "ok");
+
+    PqtlsOffer offer;
+    offer.seen = true;
+    offer.pq_group = 0x11ec;
+    EXPECT_NE(pqtls_posture(offer, sh.pqtls, 0x0304), PqtlsPosture::HYBRID_SELECTED_OBSERVED);
+}
+
+// ServerHello key_share with trailing byte
+TEST(PqtlsParserTest, ServerKeyShareWithTrailingBytes) {
+    Bytes body;
+    add16(body, 0x11ec);
+    add16(body, 1120);
+    body.insert(body.end(), 1120, 0xBB);
+    body.push_back(0x00);       // Trailing byte
+    Bytes record = make_server_hello(make_extension(0x0033, body));
+
+    ServerHelloData sh;
+    ASSERT_TRUE(parse_server_hello(record.data(), record.size(), sh));
+    EXPECT_FALSE(sh.pqtls.key_share_parsed);
+}
+
+// HRR carrying a full key share is malformed
+TEST(PqtlsParserTest, HrrWithKeyBytesIsNotParsed) {
+    Bytes body;
+    add16(body, 0x11ec);
+    add16(body, 1120);
+    body.insert(body.end(), 1120, 0xBB);
+    Bytes record = make_server_hello(make_extension(0x0033, body), true);
+
+    ServerHelloData sh;
+    ASSERT_TRUE(parse_server_hello(record.data(), record.size(), sh));
+    EXPECT_TRUE(sh.pqtls.is_hrr);
+    EXPECT_FALSE(sh.pqtls.key_share_parsed);
+    EXPECT_NE(pqtls_server_check_text(sh.pqtls), "ok");
+}
+
+// Truncated client key_share must not report "ok"
+TEST(PqtlsParserTest, TruncatedClientKeyShareIsReported) {
+    Bytes body;
+    add16(body, 4 + 10);        // list_len
+    add16(body, 0x11ec);        // group
+    add16(body, 1216);          // key_len (overstated)
+    body.insert(body.end(), 10, 0xAA);
+    Bytes record = make_client_hello(join(
+        make_extension(0x000a, make_groups_body({0x11ec, 0x001d})),
+        make_extension(0x0033, body)));
+
+    ClientHelloData ch;
+    ASSERT_TRUE(parse_client_hello(record.data(), record.size(), ch));
+
+    EXPECT_FALSE(ch.pqtls.key_share_parsed);
+    EXPECT_EQ(pqtls_client_findings(ch.pqtls), PQTLS_MALFORMED_KEY_SHARE);
+    EXPECT_NE(pqtls_client_check_text(ch.pqtls), "ok");
+    EXPECT_EQ(pqtls_share_mode(ch.pqtls, false), PqtlsShareMode::UNKNOWN_SHARE);
+}
+
+// 1200 B X25519MLKEM768 key: not PROACTIVE_SHARE_VALID
+TEST(PqtlsParserTest, Client1200ByteKeyIsNotValid) {
+    Bytes record = make_client_hello(join(
+        make_extension(0x000a, make_groups_body({0x11ec, 0x001d})),
+        make_extension(0x0033, make_key_share_body({{0x11ec, 1200}, {0x001d, 32}}))));
+
+    ClientHelloData ch;
+    ASSERT_TRUE(parse_client_hello(record.data(), record.size(), ch));
+
+    EXPECT_TRUE(ch.pqtls.key_share_parsed);
+    EXPECT_EQ(pqtls_client_findings(ch.pqtls), PQTLS_MALFORMED_SHARE_LENGTH);
+    EXPECT_EQ(pqtls_share_mode(ch.pqtls, false), PqtlsShareMode::UNKNOWN_SHARE);
 }
