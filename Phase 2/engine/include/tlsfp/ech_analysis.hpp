@@ -25,5 +25,10 @@ void analyze_ech(EchObservation &observation, HelloRole role = HelloRole::Unknow
 bool ech_non_acceptance_observed(const EchObservation &, ParseStatus client_status,
                                  ParseStatus server_status, std::optional<uint16_t> version) noexcept;
 
+// RFC 9849 §6.1.3 recommended padding evaluation: L_payload % 32 == 16 for outer offers (variant 0).
+[[nodiscard]] inline constexpr bool ech_has_recommended_padding(const EchExtension &ext) noexcept {
+    return ext.variant && *ext.variant == 0 && ext.payload_length.has_value() && (*ext.payload_length % 32 == 16);
+}
+
 } // namespace tlsfp
 #endif

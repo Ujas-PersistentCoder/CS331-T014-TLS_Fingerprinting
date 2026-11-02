@@ -97,3 +97,19 @@ TEST(EchAnalysisTest, ScratchpadResetClearsAllFindings) {
     EXPECT_FALSE(out.ech.present.has_value());
     EXPECT_EQ(out.parse_status, ParseStatus::NotExamined);
 }
+
+TEST(EchAnalysisTest, RecommendedPaddingAdheresToRFC9849) {
+    EchExtension ext;
+    ext.variant = 0;
+    ext.payload_length = 144; // 144 % 32 == 16 (RFC 9849 §6.1.3 recommended)
+    EXPECT_TRUE(ech_has_recommended_padding(ext));
+
+    ext.payload_length = 208; // 208 % 32 == 16
+    EXPECT_TRUE(ech_has_recommended_padding(ext));
+
+    ext.payload_length = 150; // 150 % 32 == 22 != 16
+    EXPECT_FALSE(ech_has_recommended_padding(ext));
+
+    ext.variant = 1; // Inner variant has no payload
+    EXPECT_FALSE(ech_has_recommended_padding(ext));
+}
