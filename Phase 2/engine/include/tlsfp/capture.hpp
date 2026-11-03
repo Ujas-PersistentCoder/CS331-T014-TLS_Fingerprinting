@@ -7,8 +7,12 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include <atomic>
+#include <cstddef>
 
 namespace tlsfp {
+
+struct WorkerContext;
 
 struct CaptureOptions {
     std::string read_filename;    // Offline PCAP path
@@ -22,12 +26,14 @@ struct CaptureOptions {
     std::string legacy_filename{"code/python/fingerprints.json"};
     std::string redis_host{"127.0.0.1"};
     uint16_t redis_port{6379};
+    size_t num_threads{0};
 };
 
 struct CaptureStats {
-    uint64_t total_packets{0};
-    uint64_t client_hellos{0};
-    uint64_t server_hellos{0};
+    std::atomic<uint64_t> total_packets{0};
+    std::atomic<uint64_t> client_hellos{0};
+    std::atomic<uint64_t> server_hellos{0};
+    std::atomic<uint64_t> dropped_packets{0};
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point end_time;
 
@@ -38,7 +44,7 @@ struct CaptureStats {
 
     [[nodiscard]] double packets_per_second() const noexcept {
         double sec = elapsed_seconds();
-        return (sec > 0.0) ? (total_packets / sec) : 0.0;
+        return (sec > 0.0) ? (total_packets.load(std::memory_order_relaxed) / sec) : 0.0;
     }
 };
 
@@ -66,16 +72,11 @@ public:
         return stats_;
     }
 
-    void stop() noexcept {
-        stop_requested_ = true;
-        if (pcap_handle_) {
-            pcap_breakloop(pcap_handle_);
-        }
-    }
+    void stop() noexcept;
 
 private:
     bool setup_pcap();
-    void process_assembled_handshake(const FlowKey &key, 
+    void process_assembled_handshake(WorkerContext &ctx, const FlowKey &key,
                                      const uint8_t *record_data, 
                                      size_t record_len);
 
@@ -83,8 +84,7 @@ private:
     CaptureStats stats_;
     pcap_t *pcap_handle_{nullptr};
     int datalink_type_{0};
-    bool stop_requested_{false};
-    std::unique_ptr<TwoTierAccumulator> accumulator_;
+    std::atomic<bool> stop_requested_{false};
 
     // Forward declarations for DB & parser scratchpads are hooked in implementation
     struct Impl;
