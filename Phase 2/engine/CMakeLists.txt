@@ -79,6 +79,8 @@ target_link_libraries(tlsfp_phase2
 
 # Unit tests (ctest)
 enable_testing()
+
+# 1. JA4T standalone test runner
 add_executable(tlsfp_phase2_tests
     tests/test_ja4t.cpp
 )
@@ -87,3 +89,29 @@ target_link_libraries(tlsfp_phase2_tests
         tlsfp_phase2_lib
 )
 add_test(NAME ja4t COMMAND tlsfp_phase2_tests)
+
+# 2. GoogleTest-based unit tests
+find_package(GTest QUIET)
+if(NOT GTest_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    add_library(GTest::gtest ALIAS gtest)
+    add_library(GTest::gtest_main ALIAS gtest_main)
+endif()
+
+add_executable(unit_tests
+    tests/test_fingerprints.cpp
+)
+target_link_libraries(unit_tests
+    PRIVATE
+        tlsfp_phase2_lib
+        GTest::gtest
+        GTest::gtest_main
+)
+include(GoogleTest)
+gtest_discover_tests(unit_tests)
