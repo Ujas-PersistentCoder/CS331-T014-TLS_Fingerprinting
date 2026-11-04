@@ -706,7 +706,12 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         if (ip_ptr[9] != IPPROTO_TCP) return;
 
         ip_total_len = (static_cast<size_t>(ip_ptr[2]) << 8) | ip_ptr[3];
-        if (ip_total_len < ip_hdr_len) return;
+        if (ip_total_len == 0) {
+            // TCP Segmentation Offload (TSO/GSO): kernel leaves 0 for outbound superpackets
+            ip_total_len = pkthdr->caplen - link_hdr_len;
+        } else if (ip_total_len < ip_hdr_len) {
+            return;
+        }
 
         key.ip_version = 4;
         std::memcpy(&key.src_ip.v4.s_addr, ip_ptr + 12, 4);
