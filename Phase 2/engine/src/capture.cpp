@@ -20,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
+
 namespace tlsfp {
 
 namespace Color {
@@ -147,19 +151,21 @@ void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s,
 template <typename T, size_t Capacity>
 class SPSCQueue {
 public:
-    bool push(T value) noexcept {
+    template <typename F>
+    bool emplace(F &&init) noexcept {
         const size_t head = head_.load(std::memory_order_relaxed);
         const size_t next = (head + 1) % Capacity;
         if (next == tail_.load(std::memory_order_acquire)) return false;
-        slots_[head] = std::move(value);
+        init(slots_[head]);
         head_.store(next, std::memory_order_release);
         return true;
     }
 
-    bool pop(T &value) noexcept {
+    template <typename F>
+    bool pop_into(F &&consumer) noexcept {
         const size_t tail = tail_.load(std::memory_order_relaxed);
         if (tail == head_.load(std::memory_order_acquire)) return false;
-        value = std::move(slots_[tail]);
+        consumer(slots_[tail]);
         tail_.store((tail + 1) % Capacity, std::memory_order_release);
         return true;
     }
@@ -175,14 +181,10 @@ private:
     alignas(64) std::atomic<size_t> tail_{0};
 };
 
-constexpr size_t MAX_PACKET_PAYLOAD = ACCUMULATOR_BUFFER_SIZE;
-
-struct PacketJob {
+struct HandshakeJob {
     FlowKey key;
-    uint32_t seq{0};
-    uint64_t timestamp_sec{0};
-    uint16_t payload_len{0};
-    uint8_t payload[MAX_PACKET_PAYLOAD]{};
+    uint16_t record_len{0};
+    uint8_t record_data[ACCUMULATOR_BUFFER_SIZE]{};
 };
 
 inline uint32_t compute_symmetric_flow_hash(const FlowKey &key) noexcept {
@@ -200,9 +202,7 @@ inline uint32_t compute_symmetric_flow_hash(const FlowKey &key) noexcept {
 }
 
 struct WorkerContext {
-    SPSCQueue<PacketJob, 8192> queue;
-    std::unique_ptr<TwoTierAccumulator> accumulator;
-    std::unique_ptr<FingerprintDatabase> db;
+    SPSCQueue<HandshakeJob, 2048> queue;
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
     std::thread thread;
@@ -210,28 +210,35 @@ struct WorkerContext {
 
 struct CaptureEngine::Impl {
     std::vector<std::unique_ptr<WorkerContext>> workers;
+    std::unique_ptr<FingerprintDatabase> db;
     std::atomic<bool> running{false};
     std::mutex stdout_mutex;
+    std::mutex enroll_mutex;
 
-    std::string resolve_label(WorkerContext &ctx, FingerprintKind kind,
-                              const std::string &hash, bool prompt_unknown) {
-        if (!ctx.db) return "<unknown>";
+    std::string resolve_label(FingerprintKind kind, const std::string &hash, bool prompt_unknown) {
+        if (!db) return "<unknown>";
 
         FingerprintRecord record;
-        if (ctx.db->lookup(kind, hash, record)) {
+        if (db->lookup(kind, hash, record)) {
             if (record.name.empty()) return "<unnamed>";
             if (record.category.empty()) return record.name;
             return record.name + " (" + record.category + ")";
         }
 
         if (prompt_unknown) {
+            std::lock_guard<std::mutex> enroll_lock(enroll_mutex);
+            if (db->lookup(kind, hash, record)) {
+                if (record.name.empty()) return "<unnamed>";
+                if (record.category.empty()) return record.name;
+                return record.name + " (" + record.category + ")";
+            }
             std::cout << Color::YELLOW << Color::BOLD << "[?]" << Color::RESET << " Unknown "
                       << Color::CYAN << FingerprintDatabase::kind_name(kind) << Color::RESET
                       << " fingerprint " << Color::BOLD << hash << Color::RESET
                       << ". Enter verified client/server name (empty to skip): " << std::flush;
             std::string name;
             if (std::getline(std::cin, name) && !name.empty()) {
-                if (ctx.db->enroll(kind, hash, name)) {
+                if (db->enroll(kind, hash, name)) {
                     return name + " (enrolled)";
                 }
             }
@@ -241,7 +248,12 @@ struct CaptureEngine::Impl {
 };
 
 CaptureEngine::CaptureEngine(CaptureOptions options)
-    : options_(std::move(options)), impl_(std::make_unique<Impl>()) {}
+    : options_(std::move(options)), impl_(std::make_unique<Impl>()) {
+    accumulator_ = std::make_unique<TwoTierAccumulator>(
+        [this](const FlowKey &key, const uint8_t *record, size_t len) {
+            dispatch_handshake(key, record, len);
+        });
+}
 
 CaptureEngine::~CaptureEngine() {
     stop();
@@ -253,6 +265,42 @@ CaptureEngine::~CaptureEngine() {
     if (pcap_handle_) {
         pcap_close(pcap_handle_);
         pcap_handle_ = nullptr;
+    }
+}
+
+void CaptureEngine::dispatch_handshake(const FlowKey &key, const uint8_t *record, size_t len) {
+    if (!impl_ || impl_->workers.empty()) return;
+
+    const uint32_t worker_idx = compute_symmetric_flow_hash(key) % impl_->workers.size();
+    auto &worker = *impl_->workers[worker_idx];
+
+    bool pushed = worker.queue.emplace([&](HandshakeJob &job) {
+        job.key = key;
+        job.record_len = static_cast<uint16_t>(len);
+        std::memcpy(job.record_data, record, len);
+    });
+
+    if (!pushed) {
+        if (!options_.read_filename.empty()) {
+            while (!stop_requested_.load(std::memory_order_relaxed)) {
+                #if defined(__x86_64__) || defined(_M_X64)
+                _mm_pause();
+                #else
+                std::this_thread::yield();
+                #endif
+                if (worker.queue.emplace([&](HandshakeJob &job) {
+                    job.key = key;
+                    job.record_len = static_cast<uint16_t>(len);
+                    std::memcpy(job.record_data, record, len);
+                })) {
+                    pushed = true;
+                    break;
+                }
+            }
+        }
+        if (!pushed) {
+            stats_.dropped_packets.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 
@@ -291,9 +339,10 @@ bool CaptureEngine::setup_pcap() {
         }
     }
 
+    const size_t default_threads = std::min<size_t>(4, std::max<size_t>(2, std::thread::hardware_concurrency() / 4));
     const size_t worker_count = options_.num_threads != 0
         ? options_.num_threads
-        : std::max<size_t>(1, std::thread::hardware_concurrency());
+        : default_threads;
     impl_->workers.reserve(worker_count);
     const std::string seed_path = resolve_data_file(
         options_.seed_filename, {"code/db/seed_fingerprints.json", "../db/seed_fingerprints.json", "../../code/db/seed_fingerprints.json"});
@@ -302,36 +351,37 @@ bool CaptureEngine::setup_pcap() {
     const std::string legacy_path = resolve_data_file(
         options_.legacy_filename, {"code/python/fingerprints.json", "../python/fingerprints.json", "../../code/python/fingerprints.json"});
 
+    if (!options_.quiet) {
+        RedisConfig rconf;
+        rconf.host = options_.redis_host;
+        rconf.port = options_.redis_port;
+        impl_->db = std::make_unique<FingerprintDatabase>(rconf);
+        impl_->db->connect();
+        impl_->db->load_seed_files(seed_path, manifest_path);
+        impl_->db->load_legacy_ja3_file(legacy_path);
+    }
+
     impl_->running.store(true, std::memory_order_release);
     for (size_t i = 0; i < worker_count; ++i) {
         auto ctx = std::make_unique<WorkerContext>();
-        WorkerContext *ctx_ptr = ctx.get();
-        ctx->accumulator = std::make_unique<TwoTierAccumulator>(
-            [this, ctx_ptr](const FlowKey &key, const uint8_t *record, size_t len) {
-                process_assembled_handshake(*ctx_ptr, key, record, len);
-            });
-        if (!options_.quiet) {
-            RedisConfig rconf;
-            rconf.host = options_.redis_host;
-            rconf.port = options_.redis_port;
-            ctx->db = std::make_unique<FingerprintDatabase>(rconf);
-            ctx->db->connect();
-            ctx->db->load_seed_files(seed_path, manifest_path);
-            ctx->db->load_legacy_ja3_file(legacy_path);
-        }
         impl_->workers.push_back(std::move(ctx));
     }
     for (auto &ctx : impl_->workers) {
         WorkerContext *ctx_ptr = ctx.get();
         ctx->thread = std::thread([this, ctx_ptr] {
-            PacketJob job;
             while (impl_->running.load(std::memory_order_acquire) || !ctx_ptr->queue.empty()) {
-                if (!ctx_ptr->queue.pop(job)) {
+                bool processed = ctx_ptr->queue.pop_into([this, ctx_ptr](const HandshakeJob &job) {
+                    process_assembled_handshake(*ctx_ptr, job.key, job.record_data, job.record_len);
+                });
+                if (!processed) {
+                    for (int spin = 0; spin < 64; ++spin) {
+                        #if defined(__x86_64__) || defined(_M_X64)
+                        _mm_pause();
+                        #endif
+                    }
+                    if (!ctx_ptr->queue.empty()) continue;
                     std::this_thread::yield();
-                    continue;
                 }
-                ctx_ptr->accumulator->process_segment(
-                    job.key, job.seq, job.payload, job.payload_len, job.timestamp_sec);
             }
         });
     }
@@ -353,9 +403,13 @@ void CaptureEngine::stop() noexcept {
 bool CaptureEngine::run() {
     if (!setup_pcap()) return false;
 
+    producer_packet_count_ = 0;
+    stats_.total_packets.store(0, std::memory_order_relaxed);
     stats_.start_time = std::chrono::steady_clock::now();
 
     int ret = pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
+
+    stats_.total_packets.store(producer_packet_count_, std::memory_order_relaxed);
 
     impl_->running.store(false, std::memory_order_release);
     for (auto &worker : impl_->workers) {
@@ -371,7 +425,9 @@ bool CaptureEngine::run() {
 }
 
 void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_t *packet) {
-    stats_.total_packets.fetch_add(1, std::memory_order_relaxed);
+    if ((++producer_packet_count_ & 0x03FF) == 0) {
+        stats_.total_packets.store(producer_packet_count_, std::memory_order_relaxed);
+    }
 
     size_t link_hdr_len = 0;
     uint16_t ethertype = 0;
@@ -504,18 +560,10 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         seq += 6;
     }
 
-    if (payload_len == 0 || payload_len > MAX_PACKET_PAYLOAD) return;
+    if (payload_len == 0) return;
 
-    const uint32_t worker_idx =
-        compute_symmetric_flow_hash(key) % impl_->workers.size();
-    PacketJob job;
-    job.key = key;
-    job.seq = seq;
-    job.timestamp_sec = static_cast<uint64_t>(pkthdr->ts.tv_sec);
-    job.payload_len = static_cast<uint16_t>(payload_len);
-    std::memcpy(job.payload, payload, payload_len);
-    if (!impl_->workers[worker_idx]->queue.push(std::move(job))) {
-        stats_.dropped_packets.fetch_add(1, std::memory_order_relaxed);
+    if (accumulator_) {
+        accumulator_->process_segment(key, seq, payload, payload_len, static_cast<uint64_t>(pkthdr->ts.tv_sec));
     }
 }
 
@@ -547,8 +595,8 @@ void CaptureEngine::process_assembled_handshake(WorkerContext &ctx,
             uint16_t dst_p = ntohs(key.dst_port);
 
             std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
-            std::string label_ja3 = impl_->resolve_label(ctx, FingerprintKind::JA3, ja3.md5_hash, options_.prompt_unknown);
-            std::string label_ja4 = impl_->resolve_label(ctx, FingerprintKind::JA4, ja4.full_fp, options_.prompt_unknown);
+            std::string label_ja3 = impl_->resolve_label(FingerprintKind::JA3, ja3.md5_hash, options_.prompt_unknown);
+            std::string label_ja4 = impl_->resolve_label(FingerprintKind::JA4, ja4.full_fp, options_.prompt_unknown);
 
             std::cout << "\n" << Color::CLIENT_BADGE << " "
                       << Color::BOLD << src_ip_str << ":" << src_p
@@ -590,8 +638,8 @@ void CaptureEngine::process_assembled_handshake(WorkerContext &ctx,
             uint16_t dst_p = ntohs(key.dst_port);
 
             std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
-            std::string label_ja3s = impl_->resolve_label(ctx, FingerprintKind::JA3S, ja3s.md5_hash, options_.prompt_unknown);
-            std::string label_ja4s = impl_->resolve_label(ctx, FingerprintKind::JA4S, ja4s.full_fp, options_.prompt_unknown);
+            std::string label_ja3s = impl_->resolve_label(FingerprintKind::JA3S, ja3s.md5_hash, options_.prompt_unknown);
+            std::string label_ja4s = impl_->resolve_label(FingerprintKind::JA4S, ja4s.full_fp, options_.prompt_unknown);
 
             std::cout << "\n" << Color::SERVER_BADGE << " "
                       << Color::BOLD << src_ip_str << ":" << src_p
