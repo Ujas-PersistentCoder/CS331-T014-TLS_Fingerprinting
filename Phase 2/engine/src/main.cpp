@@ -26,7 +26,7 @@ void print_usage(const char *prog) {
               << "  -f <filter>      BPF packet filter string (default: \"tcp\")\n"
               << "  -v               Enable verbose dissection of TLS handshake fields\n"
               << "  -q               Quiet / benchmark mode (suppress output, measure pps)\n"
-              << "  -t <threads>     Number of worker threads (default: auto-detect CPU cores)\n"
+              << "  -j <threads>     Number of worker threads (default: auto-detect CPU cores)\n"
               << "  -u               Interactively prompt to label unknown fingerprints\n"
               << "  -h               Show this help message and exit\n";
 }
@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
     options.bpf_filter = "tcp";
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:i:f:vqut:h")) != -1) {
+    while ((opt = getopt(argc, argv, "r:i:f:vquj:h")) != -1) {
         switch (opt) {
             case 'r':
                 options.read_filename = optarg;
@@ -58,7 +58,7 @@ int main(int argc, char *argv[]) {
             case 'u':
                 options.prompt_unknown = true;
                 break;
-            case 't':
+            case 'j':
                 options.num_threads = std::stoul(optarg);
                 break;
             case 'h':
