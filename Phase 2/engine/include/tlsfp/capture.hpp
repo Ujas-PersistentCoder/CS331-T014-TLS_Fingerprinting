@@ -86,7 +86,6 @@ private:
     pcap_t *pcap_handle_{nullptr};
     int datalink_type_{0};
     std::atomic<bool> stop_requested_{false};
-    uint64_t producer_packet_count_{0};
     std::unique_ptr<TwoTierAccumulator> accumulator_;
 
     // Forward declarations for DB & parser scratchpads are hooked in implementation

@@ -339,10 +339,9 @@ bool CaptureEngine::setup_pcap() {
         }
     }
 
-    const size_t default_threads = std::min<size_t>(4, std::max<size_t>(2, std::thread::hardware_concurrency() / 4));
     const size_t worker_count = options_.num_threads != 0
         ? options_.num_threads
-        : default_threads;
+        : std::max<size_t>(1, std::thread::hardware_concurrency());
     impl_->workers.reserve(worker_count);
     const std::string seed_path = resolve_data_file(
         options_.seed_filename, {"code/db/seed_fingerprints.json", "../db/seed_fingerprints.json", "../../code/db/seed_fingerprints.json"});
@@ -374,7 +373,7 @@ bool CaptureEngine::setup_pcap() {
                     process_assembled_handshake(*ctx_ptr, job.key, job.record_data, job.record_len);
                 });
                 if (!processed) {
-                    for (int spin = 0; spin < 64; ++spin) {
+                    for (int spin = 0; spin < 32; ++spin) {
                         #if defined(__x86_64__) || defined(_M_X64)
                         _mm_pause();
                         #endif
@@ -402,14 +401,9 @@ void CaptureEngine::stop() noexcept {
 
 bool CaptureEngine::run() {
     if (!setup_pcap()) return false;
-
-    producer_packet_count_ = 0;
-    stats_.total_packets.store(0, std::memory_order_relaxed);
     stats_.start_time = std::chrono::steady_clock::now();
 
     int ret = pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
-
-    stats_.total_packets.store(producer_packet_count_, std::memory_order_relaxed);
 
     impl_->running.store(false, std::memory_order_release);
     for (auto &worker : impl_->workers) {
@@ -425,9 +419,8 @@ bool CaptureEngine::run() {
 }
 
 void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_t *packet) {
-    if ((++producer_packet_count_ & 0x03FF) == 0) {
-        stats_.total_packets.store(producer_packet_count_, std::memory_order_relaxed);
-    }
+    stats_.total_packets.fetch_add(1, std::memory_order_relaxed);
+
 
     size_t link_hdr_len = 0;
     uint16_t ethertype = 0;
