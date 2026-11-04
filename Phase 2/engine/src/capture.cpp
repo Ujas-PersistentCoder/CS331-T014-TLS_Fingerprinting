@@ -483,7 +483,9 @@ bool CaptureEngine::run() {
 
 void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_t *packet) {
     stats_.total_packets++;
-    impl_->cleanup_stale_syns_if_due(pkthdr->ts.tv_sec);
+    if (options_.enable_ja4t) {
+        impl_->cleanup_stale_syns_if_due(pkthdr->ts.tv_sec);
+    }
 
     size_t link_hdr_len = 0;
     uint16_t ethertype = 0;
@@ -605,7 +607,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
 
     // JA4T / JA4TS: record the kernel-built SYN and SYN-ACK before the payload-less early exit
     const uint8_t tcp_flags = tcp_ptr[13];
-    if (tcp_flags & TCP_FLAG_SYN) {
+    if (options_.enable_ja4t && (tcp_flags & TCP_FLAG_SYN)) {
         if (tcp_flags & TCP_FLAG_ACK) {
             stats_.tcp_synacks++;
         } else {
@@ -654,7 +656,10 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             stats_.client_hellos++;
             JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
-            std::optional<SynObservation> syn = impl_->take_syn(key, impl_->current_packet_time);
+            std::optional<SynObservation> syn;
+            if (options_.enable_ja4t) {
+                syn = impl_->take_syn(key, impl_->current_packet_time);
+            }
 
             if (options_.quiet) return;
 
@@ -685,9 +690,11 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << Color::BOLD << ja4.full_fp << Color::RESET << "  "
                       << (label_ja4 != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4 << "]" << Color::RESET << "\n";
 
-            stats_.cross_layer_alerts +=
-                impl_->report_tcp_fingerprint(FingerprintKind::JA4T, "JA4T: ", syn, "ClientHello", options_) +
-                impl_->report_impersonation(syn, ja3.md5_hash, ja4.full_fp, options_);
+            if (options_.enable_ja4t) {
+                stats_.cross_layer_alerts +=
+                    impl_->report_tcp_fingerprint(FingerprintKind::JA4T, "JA4T: ", syn, "ClientHello", options_) +
+                    impl_->report_impersonation(syn, ja3.md5_hash, ja4.full_fp, options_);
+            }
 
             if (options_.verbose) {
                 print_verbose_client(impl_->client_scratchpad, ja3, ja4);
@@ -701,7 +708,10 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             stats_.server_hellos++;
             JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
-            std::optional<SynObservation> synack = impl_->take_syn(key, impl_->current_packet_time);
+            std::optional<SynObservation> synack;
+            if (options_.enable_ja4t) {
+                synack = impl_->take_syn(key, impl_->current_packet_time);
+            }
 
             if (options_.quiet) return;
 
@@ -732,8 +742,10 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << Color::BOLD << ja4s.full_fp << Color::RESET << "  "
                       << (label_ja4s != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESET << "\n";
 
-            stats_.cross_layer_alerts +=
-                impl_->report_tcp_fingerprint(FingerprintKind::JA4TS, "JA4TS: ", synack, "ServerHello", options_);
+            if (options_.enable_ja4t) {
+                stats_.cross_layer_alerts +=
+                    impl_->report_tcp_fingerprint(FingerprintKind::JA4TS, "JA4TS: ", synack, "ServerHello", options_);
+            }
 
             if (options_.verbose) {
                 print_verbose_server(impl_->server_scratchpad, ja3s, ja4s);

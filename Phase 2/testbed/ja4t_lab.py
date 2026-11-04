@@ -115,7 +115,7 @@ def build_catalog(path: Path, ja3: str) -> None:
 
 
 def verify(engine: Path, pcap: Path, catalog: Path) -> bool:
-    result = subprocess.run([str(engine), "-r", str(pcap), "-c", str(catalog)],
+    result = subprocess.run([str(engine), "-r", str(pcap), "-t", "-c", str(catalog)],
                             capture_output=True, text=True, check=False)
     output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
     blocks = re.split(r"\n(?= CLIENT | SERVER |=== )", output)

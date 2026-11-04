@@ -16,6 +16,7 @@ struct CaptureOptions {
     std::string bpf_filter{"tcp"};
     bool verbose{false};
     bool quiet{false};
+    bool enable_ja4t{false};
     bool prompt_unknown{false};
     std::string seed_filename{"code/db/seed_fingerprints.json"};
     std::string manifest_filename{"code/db/capture_manifest.json"};

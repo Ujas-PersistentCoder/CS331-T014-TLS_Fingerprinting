@@ -19,7 +19,9 @@ Layer note: the window and options are L4 (TCP header). The TTL used alongside t
 
 ## How the engine uses it
 
-1. `capture.cpp` records valid SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. Entries expire after 30 s; the table is capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
+JA4T/JA4TS collection is opt-in with the CLI `-t` flag. Without `-t`, the engine continues computing JA3/JA3S and JA4/JA4S but skips TCP SYN tracking and cross-layer checks.
+
+1. With `-t`, `capture.cpp` records valid SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. Entries expire after 30 s; the table is capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
 2. When the Hello arrives, the engine takes the matching entry and prints `JA4T:` / `JA4TS:` with a catalog label or an inferred OS, plus the TTL and hop count.
 3. `ja4t.cpp: infer_os()` gives a p0f-style verdict from the option layout (Linux / Apple / Windows defaults) and the initial-TTL estimate.
 
@@ -45,8 +47,8 @@ The catalog's `os` field records where a fingerprint was *captured*. Chrome, Fir
 ## Running it
 
 ```bash
-./tlsfp_phase2 -r code/pcaps/chrome.pcap -v           # JA4T/JA4TS + [V-TCP-*] dissection
-./tlsfp_phase2 -r capture.pcap -c lab_catalog.json   # extra catalog with expected_os records
+./tlsfp_phase2 -r code/pcaps/chrome.pcap -t -v        # JA4T/JA4TS + [V-TCP-*] dissection
+./tlsfp_phase2 -r capture.pcap -t -c lab_catalog.json # extra catalog with expected_os records
 ctest --test-dir build                               # JA4T unit tests
 python "Phase 2/testbed/ja4t_lab.py" --engine build/tlsfp_phase2   # end-to-end spoofing lab
 ```

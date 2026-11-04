@@ -24,6 +24,7 @@ void print_usage(const char *prog) {
               << "  -r <file>        Read and analyze offline PCAP/PCAPNG file\n"
               << "  -i <interface>   Capture live packets from network interface (requires root)\n"
               << "  -f <filter>      BPF packet filter string (default: \"tcp\")\n"
+              << "  -t               Enable JA4T/JA4TS TCP fingerprinting and cross-layer alerts\n"
               << "  -v               Enable verbose dissection of TLS handshake fields\n"
               << "  -q               Quiet / benchmark mode (suppress output, measure pps)\n"
               << "  -u               Interactively prompt to label unknown fingerprints\n"
@@ -38,7 +39,7 @@ int main(int argc, char *argv[]) {
     options.bpf_filter = "tcp";
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:i:f:c:vquh")) != -1) {
+    while ((opt = getopt(argc, argv, "r:i:f:c:tvquh")) != -1) {
         switch (opt) {
             case 'r':
                 options.read_filename = optarg;
@@ -51,6 +52,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'c':
                 options.extra_catalog_filename = optarg;
+                break;
+            case 't':
+                options.enable_ja4t = true;
                 break;
             case 'v':
                 options.verbose = true;
@@ -104,11 +108,12 @@ int main(int argc, char *argv[]) {
         std::cout << "\n\033[1;32m=== " << (is_live ? "Live Capture Summary" : "Processing Summary") << " ===\033[0m\n"
                   << "Total Packets:    " << stats.total_packets << "\n"
                   << "ClientHellos:     " << stats.client_hellos << "\n"
-                  << "ServerHellos:     " << stats.server_hellos << "\n"
-                  << "TCP SYN/SYN-ACK:  " << stats.tcp_syns << " / " << stats.tcp_synacks << "\n"
-                  << "Cross-layer Alerts: " << (stats.cross_layer_alerts ? "\033[1;31m" : "")
-                  << stats.cross_layer_alerts << "\033[0m\n"
-                  << (is_live ? "Capture Duration: " : "Elapsed Time:     ") 
+                  << "ServerHellos:     " << stats.server_hellos << "\n";
+        if (options.enable_ja4t) {
+            std::cout << "TCP SYN/SYN-ACK:  " << stats.tcp_syns << " / " << stats.tcp_synacks << "\n"
+                      << "Cross-layer Alerts: " << stats.cross_layer_alerts << "\n";
+        }
+        std::cout << (is_live ? "Capture Duration: " : "Elapsed Time:     ")
                   << std::fixed << std::setprecision(is_live ? 2 : 4) 
                   << stats.elapsed_seconds() << "s\n";
 
