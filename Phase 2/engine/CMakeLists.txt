@@ -35,6 +35,7 @@ add_library(tlsfp_phase2_lib STATIC
     src/parser.cpp
     src/ja3.cpp
     src/ja4.cpp
+    src/ja4t.cpp
     src/db.cpp
 )
 
@@ -65,25 +66,59 @@ else()
         -Wall -Wextra -Wpedantic
         $<$<CONFIG:Release>:-O3>
         $<$<CONFIG:Debug>:-g3>
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+    )
+    # PUBLIC: executables linking this static lib need the sanitizer runtimes too
+    target_link_options(tlsfp_phase2_lib PUBLIC
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
 endif()
 
-# 5. CLI Executable
-add_executable(tlsfp_phase2 src/main.cpp)
-target_link_libraries(tlsfp_phase2 PRIVATE tlsfp_phase2_lib)
-
-# 6. Cross-Platform Unit Testing Setup (FetchContent requires zero system GTest setup)
-enable_testing()
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+# CLI Executable
+add_executable(tlsfp_phase2
+    src/main.cpp
 )
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
 
-add_executable(unit_tests tests/test_fingerprints.cpp)
-target_link_libraries(unit_tests PRIVATE tlsfp_phase2_lib gtest gtest_main)
+target_link_libraries(tlsfp_phase2
+    PRIVATE
+        tlsfp_phase2_lib
+)
 
+# Unit tests (ctest)
+enable_testing()
+
+# 1. JA4T standalone test runner
+add_executable(tlsfp_phase2_tests
+    tests/test_ja4t.cpp
+)
+target_link_libraries(tlsfp_phase2_tests
+    PRIVATE
+        tlsfp_phase2_lib
+)
+add_test(NAME ja4t COMMAND tlsfp_phase2_tests)
+
+# 2. GoogleTest-based unit tests
+find_package(GTest QUIET)
+if(NOT GTest_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    add_library(GTest::gtest ALIAS gtest)
+    add_library(GTest::gtest_main ALIAS gtest_main)
+endif()
+
+add_executable(unit_tests
+    tests/test_fingerprints.cpp
+)
+target_link_libraries(unit_tests
+    PRIVATE
+        tlsfp_phase2_lib
+        GTest::gtest
+        GTest::gtest_main
+)
 include(GoogleTest)
 gtest_discover_tests(unit_tests)

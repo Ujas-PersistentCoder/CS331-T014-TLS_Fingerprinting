@@ -1,0 +1,14 @@
+{
+  "ja3": [
+    {
+      "hash": "3d7dae6f21f71b9e304c282ad06509f8",
+      "client": "Lab: Windows-only TLS client (synthetic)",
+      "version": "ja4t_lab.py",
+      "os": "windows",
+      "expected_os": "windows",
+      "category": "lab",
+      "source": "synthetic: Phase 2/testbed/ja4t_lab.py",
+      "notes": "Stands in for an OS-bound TLS stack such as Windows SChannel."
+    }
+  ]
+}
