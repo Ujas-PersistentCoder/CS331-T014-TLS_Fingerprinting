@@ -73,7 +73,7 @@ Examples:
 ```
 tlsfp:ja3:ada70206e40642a3e4461f35503241d5
 tlsfp:ja3s:15af977ce25de452b96affa2addb1036
-tlsfp:ja4:t13d3110h2_e8f1e7e78f70_b26ce05bbdd6
+tlsfp:ja4:t13d3112h2_e8f1e7e78f70_b26ce05bbdd6
 tlsfp:ja4s:t130200_1302_a56c5b993250
 ```
 

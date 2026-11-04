@@ -82,8 +82,11 @@ bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, T
         // FoxIO's reference output (macOS SYN: 65535_2-1-3-1-1-8-4-0-0_1460_6).
         if (kind == TCP_OPT_EOL) {
             ++i;
-            while (i < opts_len) {
-                if (opts[i] != TCP_OPT_EOL || parsed.option_count >= TCP_MAX_OPTIONS_LEN) return false;
+            while (i < opts_len && parsed.option_count < TCP_MAX_OPTIONS_LEN) {
+                if (opts[i] != TCP_OPT_EOL) {
+                    parsed.malformed_options = true;
+                    break;
+                }
                 parsed.option_kinds[parsed.option_count++] = TCP_OPT_EOL;
                 ++i;
             }
@@ -94,15 +97,23 @@ bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, T
             continue;
         }
 
-        if (i + 1 >= opts_len) return false;
+        // Bad TLV: keep the kind already recorded and stop walking. Rejecting the whole SYN
+        // would let a hand-crafted SYN suppress JA4T and every cross-layer check.
+        if (i + 1 >= opts_len) {
+            parsed.malformed_options = true;
+            break;
+        }
         const uint8_t len = opts[i + 1];
-        if (len < 2 || len > opts_len - i) return false;
+        if (len < 2 || len > opts_len - i) {
+            parsed.malformed_options = true;
+            break;
+        }
 
         if ((kind == TCP_OPT_MSS && len != 4) ||
             (kind == TCP_OPT_WINDOW_SCALE && len != 3) ||
-            (kind == 4 && len != 2) ||
-            (kind == 8 && len != 10)) {
-            return false;
+            (kind == TCP_OPT_SACK_PERM && len != 2) ||
+            (kind == TCP_OPT_TIMESTAMP && len != 10)) {
+            parsed.malformed_options = true; // Self-consistent length, so the walk can continue
         }
 
         if (kind == TCP_OPT_MSS && len == 4) {
@@ -163,7 +174,11 @@ OsInference infer_os(const TcpSynData &syn) noexcept {
     inf.ttl_family    = family_from_initial_ttl(inf.initial_ttl);
     inf.layout_family = classify_layout(syn);
 
-    if (inf.layout_family == OsFamily::Unknown) {
+    if (syn.malformed_options) {
+        // No stock kernel emits these, so neither layout nor TTL can be trusted
+        inf.stack_anomaly = true;
+        inf.family = OsFamily::Unknown;
+    } else if (inf.layout_family == OsFamily::Unknown) {
         inf.family = inf.ttl_family;
     } else if (inf.ttl_family == OsFamily::Unknown) {
         inf.family = inf.layout_family;

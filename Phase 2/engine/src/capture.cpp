@@ -192,35 +192,46 @@ struct CaptureEngine::Impl {
     uint8_t current_ttl{0};
     std::time_t current_packet_time{0};
 
-    void observe_syn(const FlowKey &key, const uint8_t *tcp_hdr, size_t tcp_hdr_len,
+    // Age in either direction: merged or concatenated pcaps can step the clock backwards,
+    // and entries stamped in the "future" must still expire.
+    static bool syn_expired(std::time_t seen, std::time_t now) noexcept {
+        const std::time_t age = now >= seen ? now - seen : seen - now;
+        return age >= static_cast<std::time_t>(SYN_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * @brief Records a SYN / SYN-ACK. The first one wins: BSD-derived stacks (macOS, iOS)
+     * strip window scale, timestamps and SACK from the third SYN retransmission onward,
+     * and JA4T is defined on the initial SYN.
+     * @return true if the packet was a valid SYN that is (or already was) tracked
+     */
+    bool observe_syn(const FlowKey &key, const uint8_t *tcp_hdr, size_t tcp_hdr_len,
                      uint8_t ip_ttl, std::time_t now) {
         TcpSynData syn;
-        if (!parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, syn)) return;
+        if (!parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, syn)) return false;
         if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
-            return; // Flooded with fresh SYNs: fail open, this flow just gets no JA4T
+            return false; // Flooded with fresh SYNs: fail open, this flow just gets no JA4T
         }
-        SynObservation &obs = syn_table[key];
-        obs.syn = syn;
-        obs.seen = now;
+        auto [it, inserted] = syn_table.try_emplace(key);
+        if (inserted || syn_expired(it->second.seen, now)) { // Port reuse after timeout: new connection
+            it->second.syn = syn;
+            it->second.seen = now;
+        }
+        return true;
     }
 
     std::optional<SynObservation> take_syn(const FlowKey &key, std::time_t now) {
         auto it = syn_table.find(key);
         if (it == syn_table.end()) return std::nullopt;
-        if (now < it->second.seen ||
-            now - it->second.seen >= static_cast<std::time_t>(SYN_TIMEOUT_SECONDS)) {
-            syn_table.erase(it);
-            return std::nullopt;
-        }
-        SynObservation obs = it->second;
+        std::optional<SynObservation> obs;
+        if (!syn_expired(it->second.seen, now)) obs = it->second;
         syn_table.erase(it);
         return obs;
     }
 
     void evict_stale_syns(std::time_t now) {
         for (auto it = syn_table.begin(); it != syn_table.end(); ) {
-            if (now >= it->second.seen &&
-                now - it->second.seen >= static_cast<std::time_t>(SYN_TIMEOUT_SECONDS)) {
+            if (syn_expired(it->second.seen, now)) {
                 it = syn_table.erase(it);
             } else {
                 ++it;
@@ -228,9 +239,11 @@ struct CaptureEngine::Impl {
         }
     }
 
+    // Full sweep at most once per capture-second; a backwards jump larger than the timeout
+    // (concatenated pcaps) also triggers one, otherwise the table would never drain.
     void cleanup_stale_syns_if_due(std::time_t now) {
-        if (has_syn_cleanup_time &&
-            (now < last_syn_cleanup || now - last_syn_cleanup < 1)) {
+        if (has_syn_cleanup_time && now - last_syn_cleanup < 1 &&
+            last_syn_cleanup - now < static_cast<std::time_t>(SYN_TIMEOUT_SECONDS)) {
             return;
         }
         evict_stale_syns(now);
@@ -247,8 +260,9 @@ struct CaptureEngine::Impl {
      * @return Number of alerts raised
      */
     unsigned report_tcp_fingerprint(FingerprintKind kind, const char *tag,
-                                    const std::optional<SynObservation> &obs,
-                                    const char *hello_name, const CaptureOptions &opts) {
+                                    const std::optional<SynObservation> &obs, const OsInference &inf,
+                                    const std::string &fp, const char *hello_name,
+                                    const CaptureOptions &opts) {
         std::cout << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << tag << Color::RESET;
         if (!obs) {
             std::cout << Color::GRAY << "<" << (kind == FingerprintKind::JA4T ? "SYN" : "SYN-ACK")
@@ -257,11 +271,11 @@ struct CaptureEngine::Impl {
         }
 
         const TcpSynData &syn = obs->syn;
-        const OsInference inf = infer_os(syn);
-        const std::string fp = compute_ja4t(syn);
         std::string label = resolve_label(kind, fp, opts.prompt_unknown);
         const bool catalogued = label != "<unknown>";
-        if (!catalogued && inf.stack_anomaly) {
+        if (!catalogued && syn.malformed_options) {
+            label = "inferred: malformed options";
+        } else if (!catalogued && inf.stack_anomaly) {
             label = std::string("inferred: ") + os_family_name(inf.layout_family) + " options, TTL " +
                     std::to_string(inf.initial_ttl);
         } else if (!catalogued) {
@@ -279,12 +293,16 @@ struct CaptureEngine::Impl {
         // Client SYNs only: CDNs and load balancers routinely run Linux with TTL 128/255
         if (inf.stack_anomaly && kind == FingerprintKind::JA4T) {
             print_alert(Color::YELLOW, "⚠ STACK_ANOMALY",
-                        std::string("TCP options look like ") + os_family_name(inf.layout_family) +
-                        " but initial TTL " + std::to_string(inf.initial_ttl) + " says " +
-                        os_family_name(inf.ttl_family) + " (hand-crafted SYN or TTL rewrite)");
+                        syn.malformed_options
+                            ? std::string("malformed TCP options, which no stock kernel emits (hand-crafted SYN)")
+                            : std::string("TCP options look like ") + os_family_name(inf.layout_family) +
+                                  " but initial TTL " + std::to_string(inf.initial_ttl) + " says " +
+                                  os_family_name(inf.ttl_family) + " (hand-crafted SYN or TTL rewrite)");
             ++alerts;
         }
-        if (current_ttl != syn.ip_ttl) {
+        const unsigned ttl_delta = current_ttl > syn.ip_ttl ? current_ttl - syn.ip_ttl
+                                                            : syn.ip_ttl - current_ttl;
+        if (ttl_delta > TTL_MISMATCH_TOLERANCE) {
             print_alert(Color::YELLOW, "⚠ TTL_MISMATCH",
                         std::string(kind == FingerprintKind::JA4T ? "SYN" : "SYN-ACK") + " arrived with TTL " +
                         std::to_string(syn.ip_ttl) + " but " + hello_name + " with TTL " +
@@ -300,9 +318,9 @@ struct CaptureEngine::Impl {
      * SChannel or Apple's Network.framework); cross-platform stacks like Chrome make no claim.
      * @return Number of alerts raised
      */
-    unsigned report_impersonation(const std::optional<SynObservation> &syn,
-                                  const std::string &ja3_hash, const std::string &ja4_fp,
-                                  const CaptureOptions &opts) {
+    unsigned report_impersonation(const std::optional<SynObservation> &syn, const OsInference &inf,
+                                  const std::string &ja4t_fp, const std::string &ja3_hash,
+                                  const std::string &ja4_fp, const CaptureOptions &opts) {
         if (!syn) return 0;
 
         FingerprintRecord tls_record;
@@ -313,9 +331,9 @@ struct CaptureEngine::Impl {
         }
 
         // A catalogued JA4T with an OS label beats the heuristic
-        OsFamily actual = infer_os(syn->syn).family;
+        OsFamily actual = inf.family;
         FingerprintRecord tcp_record;
-        if (lookup(FingerprintKind::JA4T, compute_ja4t(syn->syn), tcp_record)) {
+        if (lookup(FingerprintKind::JA4T, ja4t_fp, tcp_record)) {
             const OsFamily labelled = os_family_from_label(tcp_record.os);
             if (labelled != OsFamily::Unknown) actual = labelled;
         }
@@ -407,6 +425,11 @@ bool CaptureEngine::setup_pcap() {
     }
 
     datalink_type_ = pcap_datalink(pcap_handle_);
+
+    if (options_.enable_ja4t) {
+        // Allocate buckets once: a rehash of a near-full table mid SYN flood is a latency spike
+        impl_->syn_table.reserve(SYN_TABLE_MAX_ENTRIES);
+    }
 
     // Compile and set BPF filter
     if (!options_.bpf_filter.empty()) {
@@ -606,14 +629,17 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     }
 
     // JA4T / JA4TS: record the kernel-built SYN and SYN-ACK before the payload-less early exit
-    const uint8_t tcp_flags = tcp_ptr[13];
-    if (options_.enable_ja4t && (tcp_flags & TCP_FLAG_SYN)) {
-        if (tcp_flags & TCP_FLAG_ACK) {
+    // Only a genuine SYN or SYN-ACK: SYN+FIN / SYN+RST are scan probes, not connection opens.
+    // ECE/CWR (ECN negotiation), PSH and URG are ignored, as in FoxIO's is_initial_syn.
+    const uint8_t handshake_flags = tcp_ptr[13] & (TCP_FLAG_FIN | TCP_FLAG_SYN | TCP_FLAG_RST | TCP_FLAG_ACK);
+    if (options_.enable_ja4t &&
+        (handshake_flags == TCP_FLAG_SYN || handshake_flags == (TCP_FLAG_SYN | TCP_FLAG_ACK)) &&
+        impl_->observe_syn(key, tcp_ptr, tcp_hdr_len, ip_ttl, pkthdr->ts.tv_sec)) {
+        if (handshake_flags & TCP_FLAG_ACK) {
             stats_.tcp_synacks++;
         } else {
             stats_.tcp_syns++;
         }
-        impl_->observe_syn(key, tcp_ptr, tcp_hdr_len, ip_ttl, pkthdr->ts.tv_sec);
     }
 
     size_t total_hdrs = link_hdr_len + ip_hdr_len + tcp_hdr_len;
@@ -691,9 +717,12 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << (label_ja4 != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4 << "]" << Color::RESET << "\n";
 
             if (options_.enable_ja4t) {
+                const OsInference inf = syn ? infer_os(syn->syn) : OsInference{};
+                const std::string ja4t = syn ? compute_ja4t(syn->syn) : std::string();
                 stats_.cross_layer_alerts +=
-                    impl_->report_tcp_fingerprint(FingerprintKind::JA4T, "JA4T: ", syn, "ClientHello", options_) +
-                    impl_->report_impersonation(syn, ja3.md5_hash, ja4.full_fp, options_);
+                    impl_->report_tcp_fingerprint(FingerprintKind::JA4T, "JA4T: ", syn, inf, ja4t,
+                                                  "ClientHello", options_) +
+                    impl_->report_impersonation(syn, inf, ja4t, ja3.md5_hash, ja4.full_fp, options_);
             }
 
             if (options_.verbose) {
@@ -743,8 +772,11 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << (label_ja4s != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESET << "\n";
 
             if (options_.enable_ja4t) {
+                const OsInference inf = synack ? infer_os(synack->syn) : OsInference{};
+                const std::string ja4ts = synack ? compute_ja4t(synack->syn) : std::string();
                 stats_.cross_layer_alerts +=
-                    impl_->report_tcp_fingerprint(FingerprintKind::JA4TS, "JA4TS: ", synack, "ServerHello", options_);
+                    impl_->report_tcp_fingerprint(FingerprintKind::JA4TS, "JA4TS: ", synack, inf, ja4ts,
+                                                  "ServerHello", options_);
             }
 
             if (options_.verbose) {

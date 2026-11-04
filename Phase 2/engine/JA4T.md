@@ -21,17 +21,20 @@ Layer note: the window and options are L4 (TCP header). The TTL used alongside t
 
 JA4T/JA4TS collection is opt-in with the CLI `-t` flag. Without `-t`, the engine continues computing JA3/JA3S and JA4/JA4S but skips TCP SYN tracking and cross-layer checks.
 
-1. With `-t`, `capture.cpp` records valid SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. Entries expire after 30 s; the table is capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
-2. When the Hello arrives, the engine takes the matching entry and prints `JA4T:` / `JA4TS:` with a catalog label or an inferred OS, plus the TTL and hop count.
-3. `ja4t.cpp: infer_os()` gives a p0f-style verdict from the option layout (Linux / Apple / Windows defaults) and the initial-TTL estimate.
+1. With `-t`, `capture.cpp` records SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. Only pure SYN / SYN-ACK flag combinations count (ECE/CWR allowed, as in FoxIO's `is_initial_syn`); SYN+FIN and SYN+RST scan probes are ignored. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. The **first** SYN of a connection wins: macOS/iOS strip window scale, timestamps and SACK from the third retransmission onward, and JA4T is defined on the initial SYN. Entries expire after 30 s (measured in either direction, so merged pcaps whose clock steps backwards still drain); the table is pre-sized and capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
+2. A malformed option block (bad option length, non-zero bytes after EOL) does **not** drop the SYN. The option kinds read up to the fault are kept in the JA4T and the SYN is flagged. Dropping it would let a hand-crafted SYN, which kernels still accept, hide from every cross-layer check.
+3. When the Hello arrives, the engine takes the matching entry and prints `JA4T:` / `JA4TS:` with a catalog label or an inferred OS, plus the TTL and hop count.
+4. `ja4t.cpp: infer_os()` gives a p0f-style verdict from the option layout (Linux / Apple / Windows defaults) and the initial-TTL estimate.
 
 ## Alerts
 
 | Alert | Layer | Fires when | Meaning |
 |---|---|---|---|
 | `IMPERSONATION_MISMATCH` | L7 vs L4 | The TLS fingerprint's catalog record has `expected_os` and the SYN's OS disagrees with it | The client's TLS stack claims an OS its kernel doesn't run |
-| `TTL_MISMATCH` | L3 | SYN TTL ≠ ClientHello TTL on the same flow (same for SYN-ACK vs ServerHello) | The packets came from different hosts or paths: an injected or spoofed packet |
-| `STACK_ANOMALY` | L3 vs L4 | Client SYN option layout and TTL point to incompatible OSes | A hand-crafted SYN (raw socket) or a rewritten TTL |
+| `TTL_MISMATCH` | L3 | SYN TTL and ClientHello TTL on the same flow differ by more than 1 (same for SYN-ACK vs ServerHello) | The packets came from different hosts or paths: an injected or spoofed packet |
+| `STACK_ANOMALY` | L3 vs L4 | Client SYN option layout and TTL point to incompatible OSes, or the SYN carries malformed options | A hand-crafted SYN (raw socket) or a rewritten TTL |
+
+The 1-hop `TTL_MISMATCH` tolerance comes from real traffic: Cloudflare connections in `Phase 2/pcaps/pq_ech_chrome.pcap` show a SYN-ACK at TTL 111 and the ServerHello at 112 (a SYN proxy one hop closer). An injector at exactly ±1 hop goes unnoticed.
 
 `STACK_ANOMALY` is limited to client SYNs. CDN and load-balancer SYN-ACKs in `code/pcaps` routinely pair a Linux option layout with TTL 128 or 255.
 

@@ -20,6 +20,7 @@ constexpr size_t ACCUMULATOR_BUFFER_SIZE = 8192;     // 8 KB buffer: covers Kybe
 constexpr uint32_t FLOW_TIMEOUT_SECONDS = 3;         // Incomplete handshake expiration window
 constexpr uint32_t SYN_TIMEOUT_SECONDS = 30;         // SYN -> ClientHello correlation window (JA4T)
 constexpr size_t   SYN_TABLE_MAX_ENTRIES = 65536;    // Bound on tracked SYNs (SYN flood guard)
+constexpr unsigned TTL_MISMATCH_TOLERANCE = 1;       // SYN-ACK vs ServerHello differ by 1 on real CDN paths
 
 // --- Flow Identification (4-tuple) ---
 struct FlowKey {

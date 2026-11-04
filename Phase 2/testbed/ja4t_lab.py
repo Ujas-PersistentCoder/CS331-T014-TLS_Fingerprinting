@@ -11,6 +11,8 @@ the C++ engine over both must raise exactly the expected verdict per flow:
     forged_windows_syn      Windows options sent with Linux TTL   -> STACK_ANOMALY
     mid_flow                ClientHello without a captured SYN    -> no JA4T
     expired_syn             ClientHello 30+ seconds after SYN      -> no JA4T
+    malformed_syn           Zero-length option (Windows TTL)      -> STACK_ANOMALY
+    retransmitted_syn       Full SYN, then option-stripped resend -> JA4T of the first SYN
 
 Usage:
     python ja4t_lab.py [--out DIR] [--engine PATH/TO/tlsfp_phase2]
@@ -39,8 +41,13 @@ WINDOWS_SYN = dict(window=64240, options=[("MSS", 1460), ("NOP", None), ("WScale
                                           ("NOP", None), ("NOP", None), ("SAckOK", b"")])
 LINUX_SYN = dict(window=64240, options=[("MSS", 1460), ("SAckOK", b""), ("Timestamp", (1, 0)),
                                         ("NOP", None), ("WScale", 7)])
+# MSS, then Window Scale with a zero length byte: kernels stop parsing and accept the SYN
+MALFORMED_SYN = dict(window=64240, raw_options=bytes([2, 4, 0x05, 0xB4, 3, 0, 0, 0]))
+# BSD-style retransmission that drops everything but MSS; JA4T must keep the first SYN
+RETRANSMITTED_SYN = dict(WINDOWS_SYN, retransmit_options=[("MSS", 1460)])
 
-# name, client port, SYN stack (None = SYN not captured), SYN TTL, ClientHello TTL, expected tag
+# name, client port, SYN stack (None = SYN not captured), SYN TTL, ClientHello TTL,
+# expected tag (or JA4T string)
 SCENARIOS = [
     ("honest_windows",      50001, WINDOWS_SYN, 120, 120, "CROSS-LAYER OK"),
     ("impersonation_linux", 50002, LINUX_SYN,    57,  57, "IMPERSONATION_MISMATCH"),
@@ -48,6 +55,8 @@ SCENARIOS = [
     ("forged_windows_syn",  50004, WINDOWS_SYN,  57,  57, "STACK_ANOMALY"),
     ("mid_flow",            50005, None,          0, 120, "SYN not captured"),
     ("expired_syn",         50006, WINDOWS_SYN, 120, 120, "SYN not captured"),
+    ("malformed_syn",       50007, MALFORMED_SYN, 120, 120, "STACK_ANOMALY"),
+    ("retransmitted_syn",   50008, RETRANSMITTED_SYN, 120, 120, "64240_2-1-3-1-1-4_1460_8"),
 ]
 ALERT_TAGS = ("IMPERSONATION_MISMATCH", "TTL_MISMATCH", "STACK_ANOMALY")
 
@@ -82,16 +91,29 @@ def build_client_hello(sni: str) -> tuple[bytes, str]:
     return record, hashlib.md5(ja3.encode()).hexdigest()
 
 
+def build_syn(port: int, isn: int, window: int, ttl: int, options=None, raw_options: bytes = b""):
+    ip = Ether() / IP(src=CLIENT_IP, dst=SERVER_IP, ttl=ttl)
+    if raw_options:
+        # scapy would re-encode a malformed option, so write it raw behind a matching data offset
+        tcp = TCP(sport=port, dport=443, flags="S", seq=isn, window=window, dataofs=5 + len(raw_options) // 4)
+        return ip / tcp / Raw(raw_options)
+    return ip / TCP(sport=port, dport=443, flags="S", seq=isn, window=window, options=options)
+
+
 def build_pcap(path: Path, hello: bytes) -> None:
     packets = []
     t = 1_700_000_000.0
-    for _, port, stack, syn_ttl, hello_ttl, _ in SCENARIOS:
+    for name, port, stack, syn_ttl, hello_ttl, _ in SCENARIOS:
         isn = 1000 * port
         if stack is not None:
-            syn = Ether() / IP(src=CLIENT_IP, dst=SERVER_IP, ttl=syn_ttl) / TCP(
-                sport=port, dport=443, flags="S", seq=isn, window=stack["window"], options=stack["options"])
+            syn = build_syn(port, isn, stack["window"], syn_ttl,
+                            stack.get("options"), stack.get("raw_options", b""))
             syn.time = t
             packets.append(syn)
+            if "retransmit_options" in stack:
+                resend = build_syn(port, isn, stack["window"], syn_ttl, stack["retransmit_options"])
+                resend.time = t + 0.02
+                packets.append(resend)
         ch = Ether() / IP(src=CLIENT_IP, dst=SERVER_IP, ttl=hello_ttl) / TCP(
             sport=port, dport=443, flags="PA", seq=isn + 1, ack=1, window=1026) / Raw(hello)
         ch.time = t + (31.0 if name == "expired_syn" else 0.05)

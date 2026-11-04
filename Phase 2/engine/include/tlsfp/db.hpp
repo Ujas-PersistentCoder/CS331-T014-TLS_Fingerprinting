@@ -65,6 +65,7 @@ public:
 private:
     bool send_command(const std::vector<std::string> &arguments, RedisValue &reply);
     bool select_database();
+    void remember_missing(const std::string &key);
 
     RedisConfig config_;
     int socket_{-1};

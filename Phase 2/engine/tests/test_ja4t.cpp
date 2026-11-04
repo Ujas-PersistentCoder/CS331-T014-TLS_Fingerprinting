@@ -66,9 +66,27 @@ int main() {
     // --- Robustness ---
     TcpSynData malformed = parse(tcp_header(64240, WINDOWS_OPTS), 128);
     auto malformed_header = tcp_header(1024, {2, 4, 0x05, 0xb4, 3, 0});
-    check(!parse_tcp_syn(malformed_header.data(), malformed_header.size(), 64, malformed),
-          "Rejects a malformed zero-length option");
-    check(compute_ja4t(malformed) == "0_00_00_00", "Invalid input clears a previous parse result");
+    check(parse_tcp_syn(malformed_header.data(), malformed_header.size(), 64, malformed) &&
+          malformed.malformed_options, "Malformed zero-length option is flagged, not dropped");
+    check_eq(compute_ja4t(malformed), "1024_2-3_1460_00", "Malformed option keeps kinds read so far");
+    OsInference crafted = infer_os(malformed);
+    check(crafted.stack_anomaly && crafted.family == OsFamily::Unknown,
+          "Malformed options -> STACK_ANOMALY, no TTL-only OS guess");
+
+    TcpSynData eol_garbage = parse(tcp_header(1024, {2, 4, 0x05, 0xb4, 0, 0, 7, 0}), 64);
+    check(eol_garbage.malformed_options, "Non-zero byte after EOL is flagged");
+    check_eq(compute_ja4t(eol_garbage), "1024_2-0-0_1460_00", "EOL padding before the garbage byte is kept");
+
+    TcpSynData bad_mss = parse(tcp_header(1024, {2, 6, 0x05, 0xb4, 0, 0, 1, 3, 3, 7}), 64);
+    check(bad_mss.malformed_options && !bad_mss.has_mss && bad_mss.has_window_scale,
+          "Wrong MSS length: flagged, value ignored, walk continues");
+
+    check(!parse(tcp_header(64240, WINDOWS_OPTS), 128).malformed_options, "Stock Windows SYN is not malformed");
+    check(!parse(tcp_header(65535, MACOS_OPTS), 64).malformed_options, "Stock macOS SYN (EOL padded) is not malformed");
+
+    auto truncated = tcp_header(1024, {});
+    check(!parse_tcp_syn(truncated.data(), 10, 64, malformed) && compute_ja4t(malformed) == "0_00_00_00",
+          "Invalid header clears a previous parse result");
 
     auto non_syn = tcp_header(1024, {2, 4, 0x05, 0xb4});
     non_syn[13] = 0;

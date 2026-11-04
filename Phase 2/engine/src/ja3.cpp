@@ -104,8 +104,16 @@ JA3Fingerprint compute_ja3s(const ServerHelloData &server) {
     fp.raw_string.append(ver_buf, static_cast<size_t>(c_ptr - ver_buf));
     fp.raw_string += ',';
 
-    // 3. Extensions
-    append_joined(fp.raw_string, server.extensions);
+    // 3. Extensions (GREASE removed here: the parser keeps it for JA4S)
+    char num_buf[16];
+    bool first = true;
+    for (uint16_t ext : server.extensions) {
+        if (is_grease(ext)) continue;
+        if (!first) fp.raw_string += '-';
+        first = false;
+        auto [e_ptr, e_ec] = std::to_chars(num_buf, num_buf + sizeof(num_buf), static_cast<uint32_t>(ext));
+        fp.raw_string.append(num_buf, static_cast<size_t>(e_ptr - num_buf));
+    }
 
     // Compute MD5
     fp.md5_hash = md5_hex(fp.raw_string);

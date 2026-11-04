@@ -10,13 +10,17 @@
 namespace tlsfp {
 
 // --- TCP Header Constants ---
+constexpr uint8_t TCP_FLAG_FIN = 0x01;
 constexpr uint8_t TCP_FLAG_SYN = 0x02;
+constexpr uint8_t TCP_FLAG_RST = 0x04;
 constexpr uint8_t TCP_FLAG_ACK = 0x10;
 
 constexpr uint8_t TCP_OPT_EOL          = 0;
 constexpr uint8_t TCP_OPT_NOP          = 1;
 constexpr uint8_t TCP_OPT_MSS          = 2;
 constexpr uint8_t TCP_OPT_WINDOW_SCALE = 3;
+constexpr uint8_t TCP_OPT_SACK_PERM    = 4;
+constexpr uint8_t TCP_OPT_TIMESTAMP    = 8;
 
 constexpr size_t TCP_MAX_OPTIONS_LEN = 40; // 60-byte max header - 20-byte fixed header
 
@@ -36,6 +40,7 @@ struct TcpSynData {
     uint8_t  window_scale{0};
     std::array<uint8_t, TCP_MAX_OPTIONS_LEN> option_kinds{}; // Wire order, incl. NOP/EOL
     uint8_t  option_count{0};
+    bool     malformed_options{false}; // Bad option length or non-zero bytes after EOL
 
     void clear() noexcept { *this = TcpSynData{}; }
 };
@@ -45,7 +50,9 @@ struct TcpSynData {
  * @param tcp_hdr Pointer to start of TCP header
  * @param tcp_hdr_len Full TCP header length (data offset * 4), already bounds-checked
  * @param ip_ttl TTL / Hop Limit from the enclosing IP header
- * @return false if the header is shorter than 20 bytes
+ * @return false if the header is invalid (length, data offset, SYN flag). Malformed options
+ *         do not fail the parse: kinds read so far are kept and malformed_options is set,
+ *         since a stack that accepts the SYN anyway would otherwise hide from JA4T.
  */
 bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, TcpSynData &out);
 
