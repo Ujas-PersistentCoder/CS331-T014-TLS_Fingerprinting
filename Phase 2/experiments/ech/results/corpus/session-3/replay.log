@@ -1,0 +1,11 @@
+["/Users/pranjal/Projects/CS 331 CN 2026/TLS-Fingerprinting/Phase 2/experiments/ech/.local/engine-build/tlsfp_phase2", "-r", "/Users/pranjal/Projects/CS 331 CN 2026/TLS-Fingerprinting/Phase 2/experiments/ech/results/corpus/session-3/capture.pcap", "-q", "--json", "/Users/pranjal/Projects/CS 331 CN 2026/TLS-Fingerprinting/Phase 2/experiments/ech/results/corpus/session-3/engine.jsonl"]
+
+[1;36m====================================================[0m
+[1;37m            Benchmark Execution Summary             [0m
+[1;36m====================================================[0m
+Total Packets Scanned : 323
+ClientHellos Found    : 20
+ServerHellos Found    : 20
+Execution Time        : 3.207 ms (0.0032 s)
+Processing Throughput : 100717.2 packets/s (100.7 kpps)
+[1;36m====================================================[0m
