@@ -893,8 +893,11 @@ struct CaptureEngine::Impl {
 };
 
 CaptureEngine::CaptureEngine(CaptureOptions options)
-    : options_(std::move(options)),
-      impl_(std::make_unique<Impl>(options_)) {
+    : options_(std::move(options)) {
+    if (!options_.json_filename.empty()) {
+        options_.enable_ech = true;
+    }
+    impl_ = std::make_unique<Impl>(options_);
     accumulator_ = std::make_unique<TwoTierAccumulator>(
         [this](const FlowKey &key, const uint8_t *record, size_t len) {
             this->process_assembled_handshake(key, record, len);
@@ -902,7 +905,8 @@ CaptureEngine::CaptureEngine(CaptureOptions options)
         TwoTierAccumulator::RecordLimitCallback{},
         [this](const FlowKey &key, ParseStatus status, const char *reason, const uint8_t *prefix, size_t length) {
             record_issue(key, status, reason, prefix, length);
-        }, options_.max_connections * 2
+        }, options_.max_connections * 2,
+        options_.enable_ech
     );
 }
 
@@ -1300,6 +1304,7 @@ void CaptureEngine::maintenance() {
 size_t CaptureEngine::retained_connection_count() const noexcept { return impl_->connections.size(); }
 
 bool CaptureEngine::finish_capture(const char *reason) {
+    if (!options_.enable_ech) return !impl_->failed;
     accumulator_->flush_pending(reason);
     std::vector<Connection *> ordered;
     for (auto &[key, connection] : impl_->connections) ordered.push_back(&connection);
@@ -1349,6 +1354,12 @@ void CaptureEngine::ingest_tcp_segment(const FlowKey &key, uint32_t seq, uint8_t
                                         const uint8_t *payload, size_t length, uint64_t timestamp_us,
                                         bool truncated) {
     if (impl_->failed) return;
+    if (!options_.enable_ech) {
+        if (truncated) return;
+        accumulator_->process_segment(key, seq + ((flags & TH_SYN) ? 1 : 0), payload,
+                                      length, static_cast<time_t>(timestamp_us / 1000000));
+        return;
+    }
     impl_->watermark_us = std::max(impl_->watermark_us, timestamp_us);
     maintenance();
     const FlowKey canonical = canonical_flow(key);
@@ -1428,6 +1439,16 @@ void CaptureEngine::ingest_tcp_segment(const FlowKey &key, uint32_t seq, uint8_t
 }
 
 void CaptureEngine::process_assembled_handshake(const FlowKey &key, const uint8_t *record, size_t length) {
+    if (length < 5) return;
+    if (!options_.enable_ech) {
+        if (record[0] != TLS_RECORD_HANDSHAKE) return;
+        if (!impl_->workers.empty()) {
+            dispatch_handshake(key, record, length);
+            return;
+        }
+        process_hello(key, record, length);
+        return;
+    }
     auto it = impl_->connections.find(canonical_flow(key));
     if (it == impl_->connections.end() || it->second.emitted || length < 5) return;
     auto &connection = it->second;
@@ -1497,6 +1518,75 @@ void CaptureEngine::process_hello(const FlowKey &key,
     if (record_len < 6 || record_data[0] != TLS_RECORD_HANDSHAKE) return;
 
     uint8_t hs_type = record_data[5]; // Byte 0..4 = Record Header, Byte 5 = Handshake Type
+    if (!options_.enable_ech) {
+        if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
+            if (parse_client_hello(record_data, record_len, impl_->client_scratchpad)) {
+                stats_.client_hellos++;
+                if (options_.quiet) return;
+                JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
+                JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
+                char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
+                if (key.ip_version == 4) {
+                    inet_ntop(AF_INET, &key.src_ip.v4, src_ip_str, sizeof(src_ip_str));
+                    inet_ntop(AF_INET, &key.dst_ip.v4, dst_ip_str, sizeof(dst_ip_str));
+                } else {
+                    inet_ntop(AF_INET6, &key.src_ip.v6, src_ip_str, sizeof(src_ip_str));
+                    inet_ntop(AF_INET6, &key.dst_ip.v6, dst_ip_str, sizeof(dst_ip_str));
+                }
+                uint16_t src_p = ntohs(key.src_port);
+                uint16_t dst_p = ntohs(key.dst_port);
+                std::string label_ja3 = impl_->resolve_label(FingerprintKind::JA3, ja3.md5_hash, options_.prompt_unknown);
+                std::string label_ja4 = impl_->resolve_label(FingerprintKind::JA4, ja4.full_fp, options_.prompt_unknown);
+                std::cout << "\n" << Color::CLIENT_BADGE << " "
+                          << Color::BOLD << src_ip_str << ":" << src_p
+                          << Color::RESET << Color::GRAY << " ──▶ " << Color::RESET
+                          << Color::BOLD << dst_ip_str << ":" << dst_p << Color::RESET << "\n"
+                          << Color::GRAY << "   │  " << Color::RESET
+                          << Color::CYAN << "JA3:  " << Color::RESET
+                          << Color::BOLD << ja3.md5_hash << Color::RESET << "  "
+                          << (label_ja3 != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja3 << "]" << Color::RESET << "\n"
+                          << Color::GRAY << "   │  " << Color::RESET
+                          << Color::CYAN << "JA4:  " << Color::RESET
+                          << Color::BOLD << ja4.full_fp << Color::RESET << "  "
+                          << (label_ja4 != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4 << "]" << Color::RESET << "\n";
+                if (options_.verbose) print_verbose_client(impl_->client_scratchpad, ja3, ja4);
+            }
+        } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
+            if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {
+                if (impl_->server_scratchpad.is_hrr) return;
+                stats_.server_hellos++;
+                if (options_.quiet) return;
+                JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
+                JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
+                char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
+                if (key.ip_version == 4) {
+                    inet_ntop(AF_INET, &key.src_ip.v4, src_ip_str, sizeof(src_ip_str));
+                    inet_ntop(AF_INET, &key.dst_ip.v4, dst_ip_str, sizeof(dst_ip_str));
+                } else {
+                    inet_ntop(AF_INET6, &key.src_ip.v6, src_ip_str, sizeof(src_ip_str));
+                    inet_ntop(AF_INET6, &key.dst_ip.v6, dst_ip_str, sizeof(dst_ip_str));
+                }
+                uint16_t src_p = ntohs(key.src_port);
+                uint16_t dst_p = ntohs(key.dst_port);
+                std::string label_ja3s = impl_->resolve_label(FingerprintKind::JA3S, ja3s.md5_hash, options_.prompt_unknown);
+                std::string label_ja4s = impl_->resolve_label(FingerprintKind::JA4S, ja4s.full_fp, options_.prompt_unknown);
+                std::cout << "\n" << Color::SERVER_BADGE << " "
+                          << Color::BOLD << src_ip_str << ":" << src_p
+                          << Color::RESET << Color::GRAY << " ──▶ " << Color::RESET
+                          << Color::BOLD << dst_ip_str << ":" << dst_p << Color::RESET << "\n"
+                          << Color::GRAY << "   │  " << Color::RESET
+                          << Color::CYAN << "JA3S: " << Color::RESET
+                          << Color::BOLD << ja3s.md5_hash << Color::RESET << "  "
+                          << (label_ja3s != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja3s << "]" << Color::RESET << "\n"
+                          << Color::GRAY << "   │  " << Color::RESET
+                          << Color::CYAN << "JA4S: " << Color::RESET
+                          << Color::BOLD << ja4s.full_fp << Color::RESET << "  "
+                          << (label_ja4s != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESET << "\n";
+                if (options_.verbose) print_verbose_server(impl_->server_scratchpad, ja3s, ja4s);
+            }
+        }
+        return;
+    }
     auto it = impl_->connections.find(canonical_flow(key));
     if (it == impl_->connections.end() || it->second.emitted) return;
     auto &connection = it->second;
@@ -1689,7 +1779,11 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
 
     if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
         if (parse_client_hello(record_data, record_len, ctx.client_scratchpad)) {
-            analyze_ech(ctx.client_scratchpad.ech, job.hello_role);
+            if (options_.enable_ech) {
+                analyze_ech(ctx.client_scratchpad.ech, job.hello_role);
+            } else {
+                stats_.client_hellos.fetch_add(1, std::memory_order_relaxed);
+            }
             if (options_.quiet && !options_.enable_ja4t) return;
             JA3Fingerprint ja3 = compute_ja3(ctx.client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx.client_scratchpad);
@@ -1742,6 +1836,9 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         if (parse_server_hello(record_data, record_len, ctx.server_scratchpad)) {
             if (ctx.server_scratchpad.is_hrr) return;
+            if (!options_.enable_ech) {
+                stats_.server_hellos.fetch_add(1, std::memory_order_relaxed);
+            }
             if (options_.quiet && !options_.enable_ja4t) return;
             JA3Fingerprint ja3s = compute_ja3s(ctx.server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(ctx.server_scratchpad);

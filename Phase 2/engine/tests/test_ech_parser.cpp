@@ -285,6 +285,7 @@ TEST(EchHelloTest, EveryCapturePrefixIsIncompleteAndNeverAbsent) {
 
 TEST(EchReplayTest, SyntheticPcapHasFieldsFindingsAndFramingDiagnostics) {
     CaptureOptions options;
+    options.enable_ech = true;
     options.read_filename = std::string(TLSFP_FIXTURES_DIR) + "/ech_checkpoint1.pcap";
     options.verbose = true;
     CaptureEngine engine(options);
@@ -315,6 +316,7 @@ TEST(EchReplayTest, SyntheticPcapHasFieldsFindingsAndFramingDiagnostics) {
 
 TEST(EchReplayTest, QuietModeSuppressesVerboseEchAndDiagnostics) {
     CaptureOptions options;
+    options.enable_ech = true;
     options.read_filename = std::string(TLSFP_FIXTURES_DIR) + "/ech_checkpoint1.pcap";
     options.verbose = true;
     options.quiet = true;

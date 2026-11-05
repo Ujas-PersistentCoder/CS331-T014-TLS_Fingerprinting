@@ -31,6 +31,8 @@ void print_usage(const char *prog) {
               << "  -j <threads>     Number of worker threads (default: auto-detect CPU cores)\n"
               << "  -u               Interactively prompt to label unknown fingerprints\n"
               << "  --json <file>    Create a new JSON Lines file of connection summaries\n"
+              << "  -e, --ech        Enable stateful ECH analysis and connection tracking\n"
+              << "  --no-ech         Disable ECH analysis (high-throughput line-rate mode, default)\n"
               << "  -c <catalog>     Load an extra catalog JSON (seed schema, e.g. ja4t / expected_os lab records)\n"
               << "  -h               Show this help message and exit\n";
 }
@@ -40,10 +42,18 @@ void print_usage(const char *prog) {
 int main(int argc, char *argv[]) {
     tlsfp::CaptureOptions options;
     options.bpf_filter = "tcp";
+    bool ech_flag_seen = false;
 
     int opt = 0;
-    const option long_options[] = {{"json", required_argument, nullptr, 1000}, {nullptr, 0, nullptr, 0}};
-    while ((opt = getopt_long(argc, argv, "r:i:f:c:tvquj:h", long_options, nullptr)) != -1) {
+    const option long_options[] = {
+        {"json", required_argument, nullptr, 1000},
+        {"ech", no_argument, nullptr, 1001},
+        {"no-ech", no_argument, nullptr, 1002},
+        {"enable-ech", no_argument, nullptr, 1001},
+        {"disable-ech", no_argument, nullptr, 1002},
+        {nullptr, 0, nullptr, 0}
+    };
+    while ((opt = getopt_long(argc, argv, "r:i:f:c:etvquj:h", long_options, nullptr)) != -1) {
         switch (opt) {
             case 1000:
                 if (!*optarg) {
@@ -51,6 +61,16 @@ int main(int argc, char *argv[]) {
                     return 1;
                 }
                 options.json_filename = optarg;
+                if (!ech_flag_seen) options.enable_ech = true;
+                break;
+            case 'e':
+            case 1001:
+                options.enable_ech = true;
+                ech_flag_seen = true;
+                break;
+            case 1002:
+                options.enable_ech = false;
+                ech_flag_seen = true;
                 break;
             case 'r':
                 options.read_filename = optarg;
@@ -84,6 +104,10 @@ int main(int argc, char *argv[]) {
                 print_usage(argv[0]);
                 return (opt == 'h') ? 0 : 1;
         }
+    }
+
+    if (!ech_flag_seen && options.json_filename.empty()) {
+        options.enable_ech = false;
     }
 
     if (options.read_filename.empty() && options.interface_name.empty()) {
