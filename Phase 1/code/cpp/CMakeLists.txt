@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.14)
 
 project(tlsfp CXX)
 
+get_filename_component(TLSFP_SOURCE_DATA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+
 # ------------------------------------------------------------------------------
 # Build configuration
 # ------------------------------------------------------------------------------
@@ -60,6 +62,9 @@ add_library(tlsfp_lib STATIC
     src/ja3.cpp
     src/ja4.cpp
 )
+
+target_compile_definitions(tlsfp_lib PRIVATE
+    TLSFP_SOURCE_DATA_ROOT="${TLSFP_SOURCE_DATA_ROOT}")
 
 target_include_directories(tlsfp_lib
     PUBLIC

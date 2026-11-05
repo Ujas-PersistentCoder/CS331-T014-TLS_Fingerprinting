@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Real-World ECH Traffic Analysis & Wireshark Dissection Report
 **Capture File:** `Phase 2/pcaps/ech-pcap.pcap`  
 **Analyzer:** `tlsfp_phase2` (Phase 2 Revamp, Team T014)  

@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # PQ-TLS checkpoint 1: observe and label
 
 This checkpoint adds passive post-quantum TLS (PQ-TLS) inspection to `tlsfp_phase2`.

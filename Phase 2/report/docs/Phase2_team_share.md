@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Phase 2 Implementation Plan: Architecture, Verticals & Team Breakdown
 
 **CS 331 Computer Networks — Project 11 (Team T014)**  

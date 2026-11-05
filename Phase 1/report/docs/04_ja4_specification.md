@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # JA4 and JA4S Fingerprint Specification
 
 **Document Scope:** Complete documentation of the FoxIO JA4/JA4S fingerprint algorithm, its differences from JA3, and the implementation in both Python and C++.

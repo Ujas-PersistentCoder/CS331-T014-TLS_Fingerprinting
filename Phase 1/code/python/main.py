@@ -98,14 +98,14 @@ def main():
 
     pcap_parser = subparsers.add_parser("pcap", help="Analyze a pcap file")
     pcap_parser.add_argument("filepath", help="Path to the pcap/pcapng file")
-    pcap_parser.add_argument("--db", default="fingerprints.json",
+    pcap_parser.add_argument("--db", default=str(Path(__file__).resolve().with_name("fingerprints.json")),
                              help="Path to fingerprints JSON DB")
     pcap_parser.add_argument("--verbose", action="store_true",
                              help="Print detailed parsed fields and debug logs")
 
     live_parser = subparsers.add_parser("live", help="Live capture (requires root)")
     live_parser.add_argument("interface", help="Network interface to sniff on")
-    live_parser.add_argument("--db", default="fingerprints.json",
+    live_parser.add_argument("--db", default=str(Path(__file__).resolve().with_name("fingerprints.json")),
                              help="Path to fingerprints JSON DB")
     live_parser.add_argument("--verbose", action="store_true",
                              help="Print detailed parsed fields and debug logs")

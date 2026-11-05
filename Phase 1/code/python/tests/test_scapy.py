@@ -1,6 +1,7 @@
 from scapy.all import rdpcap, IP, TCP
+from pathlib import Path
 
-packets = rdpcap("pcaps/capture.pcap")
+packets = rdpcap(str(Path(__file__).resolve().parents[2] / "pcaps/capture.pcap"))
 
 for packet in packets:
     if IP in packet and TCP in packet:

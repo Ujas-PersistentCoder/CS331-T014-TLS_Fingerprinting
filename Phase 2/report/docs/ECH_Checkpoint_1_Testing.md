@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # ECH checkpoint 1: decode and inspect
 
 This checkpoint adds passive ClientHello ECH envelope decoding to `tlsfp_phase2`.

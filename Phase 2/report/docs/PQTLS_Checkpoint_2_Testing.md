@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # PQ-TLS checkpoint 2: wire checks and real-capture validation
 
 Builds on checkpoint 1 (`PQTLS_Checkpoint_1_Testing.md`). This checkpoint adds the

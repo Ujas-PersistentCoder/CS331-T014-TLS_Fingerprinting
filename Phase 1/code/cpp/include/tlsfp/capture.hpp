@@ -22,8 +22,8 @@ struct CaptureOptions {
     bool quiet{false};
     bool verbose{false};
     RedisConfig redis_config;
-    std::string seed_filename{"code/db/seed_fingerprints.json"};
-    std::string manifest_filename{"code/db/capture_manifest.json"};
+    std::string seed_filename{"Phase 1/code/db/seed_fingerprints.json"};
+    std::string manifest_filename{"Phase 1/code/db/capture_manifest.json"};
     bool prompt_unknown{false};
 };
 

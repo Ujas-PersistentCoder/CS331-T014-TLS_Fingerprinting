@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Packet Capture and TCP Reassembly Pipeline
 
 **Document Scope:** Layer 2–4 processing from raw frames to reassembled TCP byte streams, covering both Python and C++ implementations.

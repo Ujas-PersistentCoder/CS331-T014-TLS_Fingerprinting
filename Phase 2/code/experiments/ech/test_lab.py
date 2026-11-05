@@ -114,6 +114,29 @@ class JoinTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    def test_source_paths_follow_repository_layout(self):
+        from run import REPO, ENGINE_SOURCE
+        self.assertTrue((REPO / "Phase 1/code/db/seed_fingerprints.json").is_file())
+        self.assertTrue((ENGINE_SOURCE / "CMakeLists.txt").is_file())
+
+    def test_replay_accepts_explicit_engine_outside_lab_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            (source / "capture.pcap").write_bytes(b"fixture")
+            engine = root / "engine"
+            engine.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n'
+                              'if [ "$1" = "--json" ]; then shift; printf "{}\\n" > "$1"; fi\n'
+                              'shift\ndone\n')
+            engine.chmod(0o700)
+            out = root / "out"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("run.py")),
+                                     "replay", "--source", str(source), "--out", str(out),
+                                     "--engine", str(engine)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((out / "0-source.jsonl").read_text(), '{}\n')
+
     def test_capture_loss_invalidates_otherwise_valid_join(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "s"

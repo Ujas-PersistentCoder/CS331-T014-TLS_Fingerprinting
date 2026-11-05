@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # JA3 and JA3S Fingerprint Specification
 
 **Document Scope:** Complete documentation of the Salesforce JA3/JA3S fingerprint algorithm as implemented in both Python and C++ tracks.

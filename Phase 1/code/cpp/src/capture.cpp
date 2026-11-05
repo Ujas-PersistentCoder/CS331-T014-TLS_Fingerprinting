@@ -614,11 +614,15 @@ bool start_capture(const CaptureOptions &opts) {
             std::cerr << "[-] Warning: Redis database unavailable; fingerprints will be reported as unknown.\n";
         } else {
             const std::string seed_path = resolve_data_file(
-                opts.seed_filename, {"../db/seed_fingerprints.json", "../../db/seed_fingerprints.json"});
+                opts.seed_filename, {TLSFP_SOURCE_DATA_ROOT "/db/seed_fingerprints.json", "code/db/seed_fingerprints.json", "../db/seed_fingerprints.json"});
             const std::string manifest_path = resolve_data_file(
-                opts.manifest_filename, {"../db/capture_manifest.json", "../../db/capture_manifest.json"});
+                opts.manifest_filename, {TLSFP_SOURCE_DATA_ROOT "/db/capture_manifest.json", "code/db/capture_manifest.json", "../db/capture_manifest.json"});
             const std::string legacy_path = resolve_data_file(
-                "code/python/fingerprints.json", {"../python/fingerprints.json", "../../python/fingerprints.json"});
+                "Phase 1/code/python/fingerprints.json", {TLSFP_SOURCE_DATA_ROOT "/python/fingerprints.json", "code/python/fingerprints.json", "../python/fingerprints.json"});
+            for (const auto &path : {seed_path, manifest_path, legacy_path}) {
+                if (!std::filesystem::is_regular_file(path))
+                    std::cerr << "[-] Warning: Catalog file missing: " << path << "\n";
+            }
             const std::size_t loaded = ctx.database->load_seed_files(seed_path, manifest_path) +
                 ctx.database->load_legacy_ja3_file(legacy_path);
             if (loaded == 0) {

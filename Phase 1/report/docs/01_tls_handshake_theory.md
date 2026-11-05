@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # TLS Handshake Theory — Conceptual Foundation
 
 **Document Scope:** Computer networks theory underlying the TLS handshake, mapped to the specific byte offsets and parsing logic used in our implementation.

@@ -11,9 +11,36 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <regex>
 
 using namespace tlsfp;
 using namespace ech_fixture;
+
+TEST(CatalogLayoutTest, LoadsSharedCatalogOutsideRepositoryWorkingDirectory) {
+    const auto root = std::filesystem::weakly_canonical(
+        std::filesystem::path(TLSFP_FIXTURES_DIR) / "../../../../..");
+    const auto original = std::filesystem::current_path();
+    struct RestoreDirectory {
+        std::filesystem::path path;
+        ~RestoreDirectory() { std::filesystem::current_path(path); }
+    } restore{original};
+    for (const auto &cwd : {root, root / "Phase 1", root / "Phase 2",
+                            std::filesystem::temp_directory_path()}) {
+        std::filesystem::current_path(cwd);
+        CaptureOptions options;
+        options.read_filename = std::string(TLSFP_FIXTURES_DIR) + "/ech_checkpoint2.pcap";
+        options.num_threads = 1;
+        options.redis_port = 0; // Exercise file-backed lookup without changing a Redis instance.
+        CaptureEngine engine(options);
+        testing::internal::CaptureStdout();
+        const bool success = engine.run();
+        const auto output = testing::internal::GetCapturedStdout();
+        EXPECT_TRUE(success);
+        EXPECT_TRUE(std::regex_search(output,
+            std::regex("Loaded [1-9][0-9]* fingerprint catalog records"))) << cwd << output;
+    }
+}
+
 namespace {
 FlowKey flow(uint16_t port = 41000) {
     FlowKey key;

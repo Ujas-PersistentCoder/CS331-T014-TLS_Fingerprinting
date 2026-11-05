@@ -1,3 +1,5 @@
+> Historical design roadmap. Current build and run instructions are in the [Phase 2 README](../../README.md); planned features below are not completion evidence.
+
 # Phase 2 C++ Engine Roadmap: Clean, High-Performance TLS Fingerprinter
 
 **CS 331 Computer Networks — Project 11 (Team T014)**  

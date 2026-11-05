@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # GREASE, Fingerprint Evasion, and Security Analysis
 
 **Document Scope:** RFC 8701 GREASE mechanism, browser extension randomization, evasion techniques, and the inherent limitations of TLS fingerprinting.

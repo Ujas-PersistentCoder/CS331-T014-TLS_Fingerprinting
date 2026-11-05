@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Dual Implementation: Python vs C++ Comparison
 
 **Document Scope:** Side-by-side analysis of the architectural, performance, and design differences between the Python and C++ engines.

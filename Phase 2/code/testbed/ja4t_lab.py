@@ -175,9 +175,9 @@ def build_server_hello() -> bytes:
 def ip_layer(sc: dict, ttl: int, to_server: bool):
     if sc["ipv6"]:
         src, dst = (CLIENT_IP6, SERVER_IP6) if to_server else (SERVER_IP6, CLIENT_IP6)
-        return Ether() / IPv6(src=src, dst=dst, hlim=ttl)
+        return Ether(src="02:00:00:00:00:01", dst="02:00:00:00:00:02") / IPv6(src=src, dst=dst, hlim=ttl)
     src, dst = (CLIENT_IP, SERVER_IP) if to_server else (SERVER_IP, CLIENT_IP)
-    return Ether() / IP(src=src, dst=dst, ttl=ttl)
+    return Ether(src="02:00:00:00:00:01", dst="02:00:00:00:00:02") / IP(src=src, dst=dst, ttl=ttl)
 
 
 def build_tcp(sc: dict, stack: dict, ttl: int, flags: str, seq: int, ack: int = 0, options=None,
@@ -235,7 +235,7 @@ def build_catalog(path: Path, ja3: str) -> None:
         "os": "windows",
         "expected_os": "windows",
         "category": "lab",
-        "source": "synthetic: Phase 2/testbed/ja4t_lab.py",
+        "source": "synthetic: Phase 2/code/testbed/ja4t_lab.py",
         "notes": "Stands in for an OS-bound TLS stack such as Windows SChannel.",
     }]}
     path.write_text(json.dumps(catalog, indent=2) + "\n")
@@ -255,12 +255,12 @@ def find_block(blocks: list[str], sc: dict) -> str:
 
 
 def verify(engine: Path, pcap: Path, catalog: Path) -> bool:
-    result = subprocess.run([str(engine), "-r", str(pcap), "-t", "-v", "-c", str(catalog)],
+    result = subprocess.run([str(engine.resolve()), "-r", str(pcap), "-t", "-v", "-c", str(catalog)],
                             capture_output=True, text=True, check=False)
     output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
     blocks = re.split(r"\n(?= CLIENT | SERVER |=== )", output)
 
-    ok = True
+    ok = result.returncode == 0
     for sc in SCENARIOS:
         block = find_block(blocks, sc)
         raised = [tag for tag in ALERT_TAGS if f"⚠ {tag}" in block or f"✖ {tag}" in block]
@@ -278,7 +278,7 @@ def verify(engine: Path, pcap: Path, catalog: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out", type=Path, default=Path(__file__).parent / "generated")
+    parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[3] / "build/ja4t-lab")
     parser.add_argument("--engine", type=Path, help="Path to tlsfp_phase2; verifies verdicts when given")
     args = parser.parse_args()
 

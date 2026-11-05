@@ -26,7 +26,7 @@ The system ships two independent, parallel implementations:
   throughput on large captures. POSIX-only due to `libpcap`.
 
 Both engines validate against the same curated reference database 
-(`code/db/`), backed by Redis with a JSON fallback, and are cross-checked 
+(`Phase 1/code/db/`), backed by Redis with a JSON fallback, and are cross-checked
 against official JA3 test vectors and each other's output on shared PCAPs.
 
 The tool demonstrates distinguishing real-world TLS clients — curl, browsers 
@@ -35,113 +35,54 @@ clients — purely from their on-the-wire handshake fingerprint, and documents
 the security applications (e.g. C2 detection) and known limitations (GREASE, 
 browser extension randomization, spoofability) of this technique.
 
-## Quick start
+## Build and run from the repository root
 
-The project is developed and tested on Ubuntu 24.04 and Ubuntu under WSL. Redis runs locally on `127.0.0.1:6379`; the repository JSON files seed the Redis database when either implementation starts.
+Set `PYTHON` to an existing virtual environment as described in the [root README](../README.md). All paths below are relative to the Git repository root, including when reading this Phase 1 README.
 
-### Install system dependencies
+C++ needs a C++17 compiler, CMake, libpcap and OpenSSL development files. GoogleTest is fetched for tests. The Phase 1 C++ catalog requires a local Redis service; Phase 2 separately supports in-memory catalog lookup.
 
-#### For Linux
-```bash
-sudo apt update
-sudo apt install -y build-essential cmake libpcap-dev libssl-dev redis-server python3-venv
-sudo systemctl enable --now redis-server
+```sh
+cmake -S 'Phase 1/code/cpp' -B build/phase1 -DCMAKE_BUILD_TYPE=Release
+cmake --build build/phase1 -j 4
+ctest --test-dir build/phase1 --output-on-failure
+build/phase1/tlsfp_engine -r 'Phase 1/code/pcaps/test_ja3.pcap'
+build/phase1/tlsfp_engine -r 'Phase 1/code/pcaps/test_ja3.pcap' -u
 ```
 
-#### For MacOS
-```bash
-brew update
-brew install cmake libpcap openssl redis python
-brew services start redis
+`-u` enables interactive labeling. Live capture uses `-i INTERFACE` and requires capture permission. Shared catalogs are in `Phase 1/code/db/` and `Phase 1/code/python/fingerprints.json`. CMake records their source location so a build can load them independently of its working directory. Rebuild after moving the source checkout.
+
+## Python CLI, GUI and tests
+
+```sh
+"$PYTHON" 'Phase 1/code/python/main.py' pcap 'Phase 1/code/pcaps/test_ja3.pcap'
+"$PYTHON" 'Phase 1/code/gui/main.py'
+"$PYTHON" -m pytest 'Phase 1/code/python/tests' -q
 ```
 
-### Redis database setup
+The GUI needs PyQt6; Scapy and dpkt handle packet inputs. See `Phase 1/code/python/requirements.txt` for dependencies. The CLI's default JSON catalog is anchored beside its source, and GUI paths are also file-relative. Select a capture from `Phase 1/code/pcaps/`. Confirm a client independently before labeling an unknown fingerprint.
 
-Redis runs locally at `127.0.0.1:6379` using database `0`. The Redis data itself is runtime state and is not stored in GitHub. The fingerprint catalog is committed to the repository in these files:
+## Catalog utilities
 
-- `code/db/seed_fingerprints.json`: curated JA3, JA3S, JA4, and JA4S records
-- `code/python/fingerprints.json`: public and legacy JA3 records
+Redis is on `127.0.0.1:6379` by default. The C++ loader seeds the tracked catalog when Redis is available. Import only approved external datasets with known provenance:
 
-No manual database import is required. When the C++ engine or Python application starts, it connects to Redis and automatically seeds the committed records. A fresh clone therefore gets the same catalog after Redis is installed and running.
-
-Verify that Redis is available with:
-
-```bash
-redis-cli ping
+```sh
+"$PYTHON" 'Phase 1/code/db/import_fingerprints.py' path/to/approved_catalog.csv
+"$PYTHON" 'Phase 1/code/db/seed_reference_db.py'
 ```
 
-Expected output:
+The legacy seed utility reads tracked local reference hashes. An optional external Salesforce-format CSV can be supplied explicitly with `--ja3-csv /absolute/path/to/file.csv`; no sibling `ja3` checkout is assumed. Do not overwrite an existing catalog with unverified labels.
 
-```text
-PONG
+## Legacy benchmarks
+
+Build `build/phase1/tlsfp_engine` first, then run:
+
+```sh
+"$PYTHON" 'Phase 1/code/benchmarks/benchmark_cpp.py'
+"$PYTHON" 'Phase 1/code/benchmarks/benchmark_python.py'
+"$PYTHON" 'Phase 1/code/benchmarks/benchmark_compare.py'
 ```
 
-If Redis is not running, start it with:
-
-#### For Linux
-```bash
-sudo systemctl start redis-server
-```
-
-The application can use its JSON fallback when Redis is unavailable, but Redis is required for the shared JA3/JA3S/JA4/JA4S catalog, persistent analyst enrollments, and consistent behavior between the C++ engine and Python GUI.
-
-### Build the C++ engine
-
-Run these commands from the repository root:
-
-```bash
-cmake -S code/cpp -B build
-cmake --build build --parallel
-```
-
-Analyze a bundled PCAP without root privileges:
-
-```bash
-./build/tlsfp_engine -r code/pcaps/test_ja3.pcap
-```
-
-Use `-a` to interactively label an unknown fingerprint after verifying its source:
-
-```bash
-./build/tlsfp_engine -r code/pcaps/test_ja3.pcap -a
-```
-
-Live capture requires root or suitable packet-capture capabilities:
-
-```bash
-sudo ./build/tlsfp_engine -i en0 -f "tcp port 443"
-```
-
-### Run the Python GUI
-
-Create the Python environment and install the dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r code/python/requirements.txt
-python code/gui/main.py
-```
-
-Click **Load PCAP File** and select a file under `code/pcaps`. Select an unknown row and use **Label Selected Fingerprint** only after confirming the client that generated the traffic.
-
-### Run Python tests
-
-```bash
-source .venv/bin/activate
-python -m pytest code/python/tests -q
-```
-
-### Import an approved external catalog
-
-External datasets must be reviewed for licensing and provenance before import. Use a CSV with `kind,hash,name,role,version,os,category,source,notes` columns, or grouped JSON using the same `ja3`, `ja3s`, `ja4`, and `ja4s` sections as `code/db/seed_fingerprints.json`.
-
-```bash
-source .venv/bin/activate
-python code/db/import_fingerprints.py path/to/approved_catalog.csv
-```
-
-Existing curated records are preserved. Use `--overwrite` only when the external record has been verified to be more authoritative.
+New CSVs and plots go to ignored `build/benchmarks/phase1/`. The original files under `Phase 1/code/benchmarks/results/` remain historical evidence. Check packet and hello counts before treating a comparison as equal work; differing counts invalidate broad speedup claims.
 
 ## AI Usage Disclosure
 

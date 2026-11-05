@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Testing and Validation
 
 **Document Scope:** Complete inventory and analysis of the test suites for both Python and C++ engines, validation methodology, and known-answer verification.

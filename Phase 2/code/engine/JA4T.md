@@ -34,7 +34,7 @@ JA4T/JA4TS collection is opt-in with the CLI `-t` flag. Without `-t`, the engine
 | `TTL_MISMATCH` | L3 | SYN TTL and ClientHello TTL on the same flow differ by more than 1 (same for SYN-ACK vs ServerHello) | The packets came from different hosts or paths: an injected or spoofed packet |
 | `STACK_ANOMALY` | L3 vs L4 | Client SYN option layout and TTL point to incompatible OSes, or the SYN carries malformed options | A hand-crafted SYN (raw socket) or a rewritten TTL |
 
-The 1-hop `TTL_MISMATCH` tolerance comes from real traffic: Cloudflare connections in `Phase 2/pcaps/pq_ech_chrome.pcap` show a SYN-ACK at TTL 111 and the ServerHello at 112 (a SYN proxy one hop closer). An injector at exactly ±1 hop goes unnoticed.
+The 1-hop `TTL_MISMATCH` tolerance comes from real traffic: Cloudflare connections in `Phase 2/code/pcaps/pq_ech_chrome.pcap` show a SYN-ACK at TTL 111 and the ServerHello at 112 (a SYN proxy one hop closer). An injector at exactly ±1 hop goes unnoticed.
 
 `STACK_ANOMALY` is limited to client SYNs. CDN and load-balancer SYN-ACKs in `code/pcaps` routinely pair a Linux option layout with TTL 128 or 255.
 
@@ -49,11 +49,13 @@ The catalog's `os` field records where a fingerprint was *captured*. Chrome, Fir
 
 ## Running it
 
+Run from the repository root after building and setting `PYTHON` as described in the root README.
+
 ```bash
-./tlsfp_phase2 -r code/pcaps/chrome.pcap -t -v        # JA4T/JA4TS + [V-TCP-*] dissection
-./tlsfp_phase2 -r capture.pcap -t -c lab_catalog.json # extra catalog with expected_os records
-ctest --test-dir build                               # JA4T unit tests
-python "Phase 2/testbed/ja4t_lab.py" --engine build/tlsfp_phase2   # invokes the engine with -t -v
+build/phase2/tlsfp_phase2 -r Phase 1/code/pcaps/chrome.pcap -t -v        # JA4T/JA4TS + [V-TCP-*] dissection
+build/phase2/tlsfp_phase2 -r capture.pcap -t -c lab_catalog.json # extra catalog with expected_os records
+ctest --test-dir build/phase2                               # JA4T unit tests
+"$PYTHON" "Phase 2/code/testbed/ja4t_lab.py" --out build/ja4t-lab --engine build/phase2/tlsfp_phase2   # invokes the engine with -t -v
 ```
 
 `ja4t_lab.py` synthesises spoofing and honest-control scenarios, including retransmission, rapid 4-tuple reuse, and missing/expired SYNs, then checks the engine's verdict for each.

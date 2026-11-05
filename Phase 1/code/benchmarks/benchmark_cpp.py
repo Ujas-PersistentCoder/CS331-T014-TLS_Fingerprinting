@@ -9,9 +9,9 @@ ansi_clean = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 ROOT = Path(__file__).resolve().parents[2]
 
-CPP = ROOT / "code" / "cpp" / "build" / "tlsfp_engine"
+CPP = ROOT.parent / "build" / "phase1" / "tlsfp_engine"
 PCAP_DIR = ROOT / "code" / "pcaps"
-RESULTS = ROOT / "code" / "benchmarks" / "results" / "cpp_results.csv"
+RESULTS = ROOT.parent / "build" / "benchmarks" / "phase1" / "cpp_results.csv"
 
 
 PCAPS = [

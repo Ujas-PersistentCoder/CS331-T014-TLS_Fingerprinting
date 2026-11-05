@@ -21,7 +21,8 @@ from analysis import compare, join_session
 from verify import verify_pilot
 
 LAB = Path(__file__).resolve().parent
-REPO = LAB.parents[2]
+REPO = LAB.parents[3]
+ENGINE_SOURCE = REPO / "Phase 2/code/engine"
 LOCAL = LAB / ".local"
 PIN = "df870ed7fa51110edb872beb3357a44d20e1ce56"
 BINARY = LOCAL / "build/ech_lab"
@@ -65,11 +66,19 @@ def tools_manifest():
     return {"boringssl_revision": PIN, "python": sys.version, "tools": versions,
             "sources": {name: digest(LAB / name) for name in ("lab.cpp", "run.py", "analysis.py", "verify.py")},
             "lab_sha256": digest(BINARY), "engine_sha256": digest(ENGINE),
-            "engine_revision": subprocess.check_output(["git", "-C", REPO, "rev-parse", "HEAD"], text=True).strip()}
+            "engine_revision": subprocess.check_output(["git", "-C", REPO, "rev-parse", "HEAD"], text=True).strip(),
+            "engine_sources": {str(path.relative_to(REPO)): digest(path)
+                               for path in [ENGINE_SOURCE / "CMakeLists.txt"] + sorted(
+                                   path for part in ("src", "include", "tests")
+                                   for path in (ENGINE_SOURCE / part).rglob("*")
+                                   if path.is_file() and path.suffix in (".cpp", ".hpp"))}}
 
 
-def build(out):
-    source, dependency_build = LOCAL / "boringssl", LOCAL / "boringssl-build"
+def build(out, boringssl_source=None, gtest_source=None):
+    source = boringssl_source.resolve() if boringssl_source else LOCAL / "boringssl"
+    dependency_build = LOCAL / "boringssl-build"
+    if boringssl_source and not (source / "CMakeLists.txt").is_file():
+        raise RuntimeError(f"BoringSSL source not found: {source}")
     LOCAL.mkdir(exist_ok=True)
     log = out / "build.log"
     if not source.exists():
@@ -83,10 +92,13 @@ def build(out):
         raise RuntimeError("BoringSSL must be the exact clean pinned checkout")
     command(["cmake", "-S", source, "-B", dependency_build, "-GNinja", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=OFF"], log)
     command(["cmake", "--build", dependency_build, "--target", "ssl", "crypto", "-j", "4"], log)
-    command(["cmake", "-S", LAB, "-B", LOCAL / "build", "-GNinja", "-DCMAKE_BUILD_TYPE=Release"], log)
+    command(["cmake", "-S", LAB, "-B", LOCAL / "build", "-GNinja", "-DCMAKE_BUILD_TYPE=Release",
+             f"-DBORINGSSL_ROOT={source}", f"-DBORINGSSL_BUILD={dependency_build}"], log)
     command(["cmake", "--build", LOCAL / "build", "-j", "4"], log)
-    engine_source = REPO / "Phase 2/code/engine" if (REPO / "Phase 2/code/engine").exists() else REPO / "Phase 2/engine"
-    command(["cmake", "-S", engine_source, "-B", LOCAL / "engine-build", "-DCMAKE_BUILD_TYPE=Release"], log)
+    engine_config = ["cmake", "-S", ENGINE_SOURCE, "-B", LOCAL / "engine-build", "-DCMAKE_BUILD_TYPE=Release"]
+    if gtest_source:
+        engine_config.append(f"-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST={gtest_source.resolve()}")
+    command(engine_config, log)
     command(["cmake", "--build", LOCAL / "engine-build", "-j", "4"], log)
     command(["ctest", "--test-dir", LOCAL / "engine-build", "--output-on-failure"], log)
     write_json(out / "build.json", tools_manifest())
@@ -405,6 +417,11 @@ def main():
     for name in ("build", "pilot", "collect", "report", "replay"):
         stage = subcommands.add_parser(name)
         stage.add_argument("--out", required=True, type=Path)
+        if name == "build":
+            stage.add_argument("--boringssl-source", type=Path, help="Reuse an exact clean pinned BoringSSL checkout")
+            stage.add_argument("--gtest-source", type=Path, help="Reuse a local GoogleTest 1.14.0 source checkout")
+        if name in ("pilot", "collect", "replay"):
+            stage.add_argument("--engine", type=Path, help="Use an existing engine binary instead of the lab build")
         if name in ("collect", "report"):
             stage.add_argument("--pilot", required=True, type=Path)
         if name == "report":
@@ -412,11 +429,14 @@ def main():
         if name == "replay":
             stage.add_argument("--source", required=True, type=Path)
     args = parser.parse_args()
+    if getattr(args, "engine", None):
+        global ENGINE
+        ENGINE = args.engine.resolve()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     try:
         if args.stage == "build":
-            build(out)
+            build(out, args.boringssl_source, args.gtest_source)
         elif args.stage == "pilot":
             pilot(out)
         elif args.stage == "collect":

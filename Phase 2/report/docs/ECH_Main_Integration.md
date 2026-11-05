@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # ECH integration with main — November 5, 2026
 
 This integrates the local reduced checkpoint 3 experiment, remote ECH through

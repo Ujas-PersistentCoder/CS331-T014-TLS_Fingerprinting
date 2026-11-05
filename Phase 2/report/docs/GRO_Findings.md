@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Findings Report: GRO Offload Impact on `tlsfp` Engine
 
 ## 1. Executive Summary

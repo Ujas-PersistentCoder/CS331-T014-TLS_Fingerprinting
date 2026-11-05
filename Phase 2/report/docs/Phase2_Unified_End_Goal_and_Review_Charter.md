@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Phase 2 Unified Charter: End Goal, Architecture, and Branch Review Rubric
 **Project:** CS331 Advanced TLS Fingerprinting Engine (`tlsfp_phase2`)  
 **Team:** T014  

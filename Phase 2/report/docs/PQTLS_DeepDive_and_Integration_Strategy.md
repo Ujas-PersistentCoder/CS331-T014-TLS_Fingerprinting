@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Post-Quantum TLS (PQ-TLS): Conceptual Blueprint, Protocol Mechanics & Engine Extension Strategy
 **CS331: Computer Networks — Network Security & TLS Fingerprinting (Phase 2 Revamp)**  
 **Team T014** · **Target Binary:** `tlsfp_phase2` · **Part 2 Final Deliverable**  

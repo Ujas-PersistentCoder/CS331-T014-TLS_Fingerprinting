@@ -75,7 +75,7 @@ outer randoms and endpoint labels never enter the augmented fingerprint.
 
 ## Fresh collection
 
-From the `TLS-Fingerprinting` repository root, use the existing parent `.venv`.
+All commands run from the `TLS-Fingerprinting` repository root. Set `PYTHON` to the existing virtual environment interpreter as described in the [root README](../../../../README.md).
 The host needs CMake, Ninja, a C++17 compiler, Git, tcpdump, TShark, and the engine's
 existing OpenSSL/libpcap/GoogleTest dependencies. Initial dependency retrieval
 requires access to GitHub. Loopback capture/listening requires permission from
@@ -85,17 +85,21 @@ Choose unused output directories. The runner refuses to replace an output
 directory, including a directory containing a previous failed run.
 
 ```sh
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' build --out /tmp/ech-build-new
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' pilot --out /tmp/ech-pilot-new
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' collect \
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' build --out /tmp/ech-build-new
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' pilot --out /tmp/ech-pilot-new
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' collect \
   --pilot /tmp/ech-pilot-new --out /tmp/ech-corpus-new
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' report \
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' report \
   --pilot /tmp/ech-pilot-new --collection /tmp/ech-corpus-new --out /tmp/ech-report-new
 ```
 
 `build` verifies the exact clean dependency checkout, builds the standalone lab
 and engine separately, runs the engine tests and records versions and binary/source
-digests. `pilot` generates fresh local key material and validates all three cases
+digests. To reuse existing dependencies without downloading them, pass
+`build --boringssl-source /absolute/path/to/pinned-boringssl --gtest-source /absolute/path/to/googletest-1.14.0 --out NEW_DIRECTORY`.
+The BoringSSL checkout must still match the pinned revision and be clean. Builds
+are created under the relocated lab's `.local/`; old CMake build caches are not moved.
+`pilot` generates fresh local key material and validates all three cases
 against TShark before collection is allowed. `collect` preserves the pilot's
 configuration/certificate and starts a new server for each of three sessions.
 Profiles alternate within each session. Every attempt remains in the schedule
@@ -120,17 +124,18 @@ metadata and the recorded report are retained as experiment evidence.
 
 ## Replay the supplied evidence
 
-These commands need the engine built by `build`, but require no live capture or
-private ECH keys. Use fresh output directories.
+These commands use the engine from the root quick start (`build/phase2/tlsfp_phase2`) and require no live capture, BoringSSL build, or private ECH keys. Use fresh output directories. Omit `--engine` to use the lab-local engine built by the `build` stage.
 
 ```sh
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' replay \
-  --source 'Phase 2/experiments/ech/results/pilot' --out /tmp/ech-pilot-replay
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' replay \
-  --source 'Phase 2/experiments/ech/results/corpus' --out /tmp/ech-corpus-replay
-../.venv/bin/python 'Phase 2/experiments/ech/run.py' report \
-  --pilot 'Phase 2/experiments/ech/results/pilot' \
-  --collection 'Phase 2/experiments/ech/results/corpus' --out /tmp/ech-report-recomputed
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' replay \
+  --engine build/phase2/tlsfp_phase2 \
+  --source 'Phase 2/code/experiments/ech/results/pilot' --out /tmp/ech-pilot-replay
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' replay \
+  --engine build/phase2/tlsfp_phase2 \
+  --source 'Phase 2/code/experiments/ech/results/corpus' --out /tmp/ech-corpus-replay
+"$PYTHON" 'Phase 2/code/experiments/ech/run.py' report \
+  --pilot 'Phase 2/code/experiments/ech/results/pilot' \
+  --collection 'Phase 2/code/experiments/ech/results/corpus' --out /tmp/ech-report-recomputed
 ```
 
 The automatic TShark pilot check compares outer randoms, endpoint tuples, ECH IDs
@@ -158,12 +163,11 @@ complete-pair, joined and excluded counts. The GREASE control stays outside the
 60-connection comparison.
 
 ```sh
-cd 'Phase 2/experiments/ech'
-../../../../.venv/bin/python -m unittest -v test_lab.py
-ctest --test-dir .local/engine-build --output-on-failure
+"$PYTHON" -m unittest discover -s 'Phase 2/code/experiments/ech' -p test_lab.py -v
+ctest --test-dir 'Phase 2/code/experiments/ech/.local/engine-build' --output-on-failure
 ```
 
-All 15 lab checks and the existing 123 engine tests passed. Saved-capture replay
+The original checkpoint passed 15 lab checks and 123 engine tests. These are historical counts; run the commands above for the current suite. Saved-capture replay
 against a separate clean build of `dd3860a` preserves all 90 ordered fingerprint
 values across seven PCAPs, plus all 42 summaries after capture-ID normalization.
 See `results/regressions.json`. Source inspection confirms the passive engine,

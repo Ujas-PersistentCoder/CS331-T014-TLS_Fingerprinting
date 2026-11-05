@@ -66,6 +66,12 @@ target_link_libraries(tlsfp_phase2_lib
         Threads::Threads
 )
 
+# Catalogs are shared with Phase 1. Resolve them independently of the launch cwd.
+get_filename_component(TLSFP_SOURCE_DATA_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../Phase 1/code" ABSOLUTE)
+target_compile_definitions(tlsfp_phase2_lib PRIVATE
+    TLSFP_SOURCE_DATA_ROOT="${TLSFP_SOURCE_DATA_ROOT}")
+
 # Link Windows Socket API library when compiling on Windows
 if(WIN32)
     target_link_libraries(tlsfp_phase2_lib PUBLIC ws2_32)

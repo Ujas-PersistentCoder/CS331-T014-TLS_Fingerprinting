@@ -1,4 +1,5 @@
 import csv
+import argparse
 import sys
 from pathlib import Path
 
@@ -8,16 +9,15 @@ sys.path.append(str(PROJECT_ROOT / "code" / "python"))
 
 from src.db import FingerprintDB
 
-def seed_db():
+def seed_db(ja3_csv=None):
     # Adjust paths relative to the project root
-    ja3_csv = PROJECT_ROOT.parent / "ja3" / "lists" / "osx-nix-ja3.csv"
     local_csv = PROJECT_ROOT / "code" / "reference" / "expected_hashes.csv"
     db_path = PROJECT_ROOT / "code" / "python" / "fingerprints.json"
     
     db = FingerprintDB(str(db_path))
     
     added = 0
-    if ja3_csv.exists():
+    if ja3_csv is not None and ja3_csv.exists():
         with open(ja3_csv, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
             for row in reader:
@@ -52,4 +52,9 @@ def seed_db():
     print(f"Seeded {added} fingerprints into {db_path.name}")
 
 if __name__ == "__main__":
-    seed_db()
+    parser = argparse.ArgumentParser(description="Seed the legacy catalog from local reference hashes.")
+    parser.add_argument("--ja3-csv", type=Path, help="Optional external JA3 CSV; no sibling checkout is assumed")
+    args = parser.parse_args()
+    if args.ja3_csv is not None and not args.ja3_csv.is_file():
+        parser.error(f"JA3 CSV not found: {args.ja3_csv}")
+    seed_db(args.ja3_csv)

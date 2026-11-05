@@ -1,3 +1,5 @@
+> Historical project notes: commands, paths and test counts describe the recorded revision. For the current repository layout and runnable commands, use the [phase README](../../README.md).
+
 # Engineering Verification: Resilience Against Hardware LRO and Kernel GRO Network Offloads
 
 ## Executive Summary

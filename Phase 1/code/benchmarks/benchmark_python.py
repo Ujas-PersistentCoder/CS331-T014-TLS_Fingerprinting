@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PY_DIR = ROOT / "code" / "python"
 WORKER = Path(__file__).resolve().parent / "_py_bench_worker.py"
 PCAP_DIR = ROOT / "code" / "pcaps"
-RESULTS = ROOT / "code" / "benchmarks" / "results" / "python_results.csv"
+RESULTS = ROOT.parent / "build" / "benchmarks" / "phase1" / "python_results.csv"
 
 sys.path.insert(0, str(PY_DIR))
 from src.capture import read_pcap, CaptureStats  # noqa: E402

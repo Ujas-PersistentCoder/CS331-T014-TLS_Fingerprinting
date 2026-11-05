@@ -23,7 +23,7 @@ import csv
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RESULTS_DIR = ROOT / "code" / "benchmarks" / "results"
+RESULTS_DIR = ROOT.parent / "build" / "benchmarks" / "phase1"
 CPP_CSV = RESULTS_DIR / "cpp_results.csv"
 PY_CSV = RESULTS_DIR / "python_results.csv"
 OUT_CSV = RESULTS_DIR / "comparison.csv"
