@@ -119,10 +119,10 @@
     },
     {
       "hash": "f4febc55ea12b31ae17cfb7e614afda8",
-      "server": "chrome_headless",
+      "server": "OpenSSL s_server",
       "category": "server",
       "source": "self-captured: chrome_headless_20260831_061717.pcap",
-      "notes": ""
+      "notes": "JA3S string 771,4865,43-51: OpenSSL s_server negotiating TLS_AES_128_GCM_SHA256 with headless Chrome as the client. Previously mislabelled 'chrome_headless' (the client, not the server)."
     }
   ],
   "ja4": [
