@@ -12,6 +12,7 @@ Spoofing that must be detected:
     forged_windows_syn      Windows options sent with Linux TTL   -> STACK_ANOMALY
     linux_ttl_rewrite       Linux options, TTL set to 128         -> STACK_ANOMALY
                             (sysctl net.ipv4.ip_default_ttl=128 changes TTL, not options)
+    rapid_tuple_reuse       New SYN with a different ISN on the same 4-tuple -> new JA4T
     malformed_syn           Zero-length option (Windows TTL)      -> STACK_ANOMALY
     window_scale_15         Window scale shift 15 (RFC 7323 max 14) -> STACK_ANOMALY
     injected_hello          SYN TTL 120, ClientHello TTL 47       -> TTL_MISMATCH
@@ -106,7 +107,9 @@ SCENARIOS = [
     scenario("malformed_syn",         50007, MALFORMED_SYN, 120, 120, "STACK_ANOMALY",
              verbose=("MALFORMED",)),
     scenario("retransmitted_syn",     50008, RETRANSMITTED_SYN, 120, 120, "64240_2-1-3-1-1-4_1460_8"),
-    scenario("impersonation_macos",   50009, MACOS_SYN,      64,  64, "IMPERSONATION_MISMATCH",
+    scenario("rapid_tuple_reuse",    50019, WINDOWS_SYN,       120,  57, "IMPERSONATION_MISMATCH",
+             reused_syn=LINUX_SYN, reused_syn_ttl=57),
+    scenario("impersonation_macos",   50009, MACOS_SYN,         64,  64, "IMPERSONATION_MISMATCH",
              verbose=("layout: macOS/iOS",)),
     scenario("impersonation_freebsd", 50010, FREEBSD_SYN,    57,  57, "IMPERSONATION_MISMATCH",
              verbose=("layout: Unix-like",)),
@@ -201,20 +204,24 @@ def build_pcap(path: Path, hello: bytes, server_hello: bytes) -> None:
 
     for sc in SCENARIOS:
         isn, server_isn = 1000 * sc["port"], 7000 * sc["port"]
+        hello_isn = isn
         stack = sc["syn"]
         if stack is not None:
             add(build_tcp(sc, stack, sc["syn_ttl"], "S", isn), t)
             if "retransmit_options" in stack:
                 add(build_tcp(sc, stack, sc["syn_ttl"], "S", isn, options=stack["retransmit_options"]), t + 0.02)
+            if "reused_syn" in sc:
+                hello_isn += 1
+                add(build_tcp(sc, sc["reused_syn"], sc["reused_syn_ttl"], "S", hello_isn), t + 0.02)
         if "synack" in sc:
-            add(build_tcp(sc, sc["synack"], sc["synack_ttl"], "SA", server_isn, isn + 1, to_server=False), t + 0.03)
+            add(build_tcp(sc, sc["synack"], sc["synack_ttl"], "SA", server_isn, hello_isn + 1, to_server=False), t + 0.03)
         hello_at = t + (31.0 if sc["name"] == "expired_syn" else 0.05)
         add(ip_layer(sc, sc["hello_ttl"], True) / TCP(
-            sport=sc["port"], dport=443, flags="PA", seq=isn + 1, ack=server_isn + 1, window=1026) / Raw(hello),
+            sport=sc["port"], dport=443, flags="PA", seq=hello_isn + 1, ack=server_isn + 1, window=1026) / Raw(hello),
             hello_at)
         if "server_hello_ttl" in sc:
             add(ip_layer(sc, sc["server_hello_ttl"], False) / TCP(
-                sport=443, dport=sc["port"], flags="PA", seq=server_isn + 1, ack=isn + 1 + len(hello),
+                sport=443, dport=sc["port"], flags="PA", seq=server_isn + 1, ack=hello_isn + 1 + len(hello),
                 window=501) / Raw(server_hello), hello_at + 0.03)
         t += 32.0 if sc["name"] == "expired_syn" else 1.0
     wrpcap(str(path), packets)

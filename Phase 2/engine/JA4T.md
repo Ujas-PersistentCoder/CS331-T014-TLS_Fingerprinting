@@ -21,7 +21,7 @@ Layer note: the window and options are L4 (TCP header). The TTL used alongside t
 
 JA4T/JA4TS collection is opt-in with the CLI `-t` flag. Without `-t`, the engine continues computing JA3/JA3S and JA4/JA4S but skips TCP SYN tracking and cross-layer checks.
 
-1. With `-t`, `capture.cpp` records SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. Only pure SYN / SYN-ACK flag combinations count (ECE/CWR allowed, as in FoxIO's `is_initial_syn`); SYN+FIN and SYN+RST scan probes are ignored. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. The **first** SYN of a connection wins: macOS/iOS strip window scale, timestamps and SACK from the third retransmission onward, and JA4T is defined on the initial SYN. Entries expire after 30 s (measured in either direction, so merged pcaps whose clock steps backwards still drain); the table is pre-sized and capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
+1. With `-t`, `capture.cpp` records SYN and SYN-ACK headers in a bounded table, before the "no payload" early exit. Only pure SYN / SYN-ACK flag combinations count (ECE/CWR allowed, as in FoxIO's `is_initial_syn`); SYN+FIN and SYN+RST scan probes are ignored. The key is the directional 4-tuple, so a SYN is found under the same `FlowKey` as its ClientHello, and a SYN-ACK under the same key as its ServerHello. Retransmissions with the same initial sequence number preserve the first SYN's options: macOS/iOS can strip options from later retransmissions. A changed initial sequence number replaces the entry as a new connection reusing that 4-tuple. Entries expire after 30 s (measured in either direction, so merged pcaps whose clock steps backwards still drain); the table is pre-sized and capped at 64 K entries and fails open under a SYN flood, so new flows may have no JA4T.
 2. A malformed option block (bad option length, non-zero bytes after EOL) does **not** drop the SYN. The option kinds read up to the fault are kept in the JA4T and the SYN is flagged. Dropping it would let a hand-crafted SYN, which kernels still accept, hide from every cross-layer check.
 3. When the Hello arrives, the engine takes the matching entry and prints `JA4T:` / `JA4TS:` with a catalog label or an inferred OS, plus the TTL and hop count.
 4. `ja4t.cpp: infer_os()` gives a p0f-style verdict from the option layout (Linux / Apple / Windows defaults) and the initial-TTL estimate.
@@ -53,10 +53,10 @@ The catalog's `os` field records where a fingerprint was *captured*. Chrome, Fir
 ./tlsfp_phase2 -r code/pcaps/chrome.pcap -t -v        # JA4T/JA4TS + [V-TCP-*] dissection
 ./tlsfp_phase2 -r capture.pcap -t -c lab_catalog.json # extra catalog with expected_os records
 ctest --test-dir build                               # JA4T unit tests
-python "Phase 2/testbed/ja4t_lab.py" --engine build/tlsfp_phase2   # end-to-end spoofing lab
+python "Phase 2/testbed/ja4t_lab.py" --engine build/tlsfp_phase2   # invokes the engine with -t -v
 ```
 
-`ja4t_lab.py` synthesises one flow per alert, plus an honest flow and a mid-flow capture, and checks the engine's verdict for each.
+`ja4t_lab.py` synthesises spoofing and honest-control scenarios, including retransmission, rapid 4-tuple reuse, and missing/expired SYNs, then checks the engine's verdict for each.
 
 ## Limits (worth stating in the report)
 

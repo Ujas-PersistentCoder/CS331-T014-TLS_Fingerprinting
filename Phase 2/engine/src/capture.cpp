@@ -258,6 +258,7 @@ void print_alert(const std::string &color, const char *tag, const std::string &m
 // A SYN or SYN-ACK held until the TLS Hello on the same directional 4-tuple arrives
 struct SynObservation {
     TcpSynData syn;
+    uint32_t sequence_number{0};
     std::time_t seen{0};
 };
 
@@ -349,24 +350,25 @@ struct CaptureEngine::Impl {
     }
 
     /**
-     * @brief Records a SYN / SYN-ACK. The first one wins: BSD-derived stacks (macOS, iOS)
-     * strip window scale, timestamps and SACK from the third SYN retransmission onward,
-     * and JA4T is defined on the initial SYN.
+     * @brief Records a SYN / SYN-ACK. Retransmissions with the same ISN keep the first
+     * fingerprint: BSD-derived stacks can strip options on later retransmits. A changed
+     * ISN identifies a new connection reusing the 4-tuple.
      * @return true if the packet was a valid SYN that is (or already was) tracked
      */
     bool observe_syn(const FlowKey &key, const uint8_t *tcp_hdr, size_t tcp_hdr_len,
-                     uint8_t ip_ttl, std::time_t now) {
+                     uint32_t sequence_number, uint8_t ip_ttl, std::time_t now) {
         TcpSynData syn;
         if (!parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, syn)) return false;
         syn.ipv6 = key.ip_version == 6;
         if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
-        if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
             return false; // Flooded with fresh SYNs: fail open, this flow just gets no JA4T
         }
-        }
         auto [it, inserted] = syn_table.try_emplace(key);
-        if (inserted || syn_expired(it->second.seen, now)) { // Port reuse after timeout: new connection
+        if (inserted || syn_expired(it->second.seen, now) ||
+            it->second.sequence_number != sequence_number) {
+            // A changed initial sequence number identifies a new connection reusing this 4-tuple.
             it->second.syn = syn;
+            it->second.sequence_number = sequence_number;
             it->second.seen = now;
         }
         return true;
@@ -886,7 +888,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     const uint8_t handshake_flags = tcp_ptr[13] & (TCP_FLAG_FIN | TCP_FLAG_SYN | TCP_FLAG_RST | TCP_FLAG_ACK);
     if (options_.enable_ja4t &&
         (handshake_flags == TCP_FLAG_SYN || handshake_flags == (TCP_FLAG_SYN | TCP_FLAG_ACK)) &&
-        impl_->observe_syn(key, tcp_ptr, tcp_hdr_len, ip_ttl, pkthdr->ts.tv_sec)) {
+        impl_->observe_syn(key, tcp_ptr, tcp_hdr_len, seq, ip_ttl, pkthdr->ts.tv_sec)) {
         if (handshake_flags & TCP_FLAG_ACK) {
             stats_.tcp_synacks.fetch_add(1, std::memory_order_relaxed);
         } else {
