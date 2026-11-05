@@ -32,9 +32,9 @@ struct CaptureOptions {
     bool enable_ech{false};
     bool enable_pqtls{false};
     bool prompt_unknown{false};
-    std::string seed_filename{"code/db/seed_fingerprints.json"};
-    std::string manifest_filename{"code/db/capture_manifest.json"};
-    std::string legacy_filename{"code/python/fingerprints.json"};
+    std::string seed_filename{"Phase 1/code/db/seed_fingerprints.json"};
+    std::string manifest_filename{"Phase 1/code/db/capture_manifest.json"};
+    std::string legacy_filename{"Phase 1/code/python/fingerprints.json"};
     std::string extra_catalog_filename; // Optional lab catalog (same schema as seed), loaded last
     std::string redis_host{"127.0.0.1"};
     uint16_t redis_port{6379};

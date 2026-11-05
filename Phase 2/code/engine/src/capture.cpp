@@ -1056,11 +1056,32 @@ bool CaptureEngine::setup_pcap() {
         impl_->db = std::make_unique<FingerprintDatabase>(rconf);
 
         const std::string seed_path = resolve_data_file(
-            options_.seed_filename, {"code/db/seed_fingerprints.json", "../db/seed_fingerprints.json", "../../code/db/seed_fingerprints.json"});
+            options_.seed_filename, {
+                "Phase 1/code/db/seed_fingerprints.json",
+                "../../../Phase 1/code/db/seed_fingerprints.json",
+                "../../Phase 1/code/db/seed_fingerprints.json",
+                "code/db/seed_fingerprints.json",
+                "../db/seed_fingerprints.json",
+                "../../code/db/seed_fingerprints.json"
+            });
         const std::string manifest_path = resolve_data_file(
-            options_.manifest_filename, {"code/db/capture_manifest.json", "../db/capture_manifest.json", "../../code/db/capture_manifest.json"});
+            options_.manifest_filename, {
+                "Phase 1/code/db/capture_manifest.json",
+                "../../../Phase 1/code/db/capture_manifest.json",
+                "../../Phase 1/code/db/capture_manifest.json",
+                "code/db/capture_manifest.json",
+                "../db/capture_manifest.json",
+                "../../code/db/capture_manifest.json"
+            });
         const std::string legacy_path = resolve_data_file(
-            options_.legacy_filename, {"code/python/fingerprints.json", "../python/fingerprints.json", "../../code/python/fingerprints.json"});
+            options_.legacy_filename, {
+                "Phase 1/code/python/fingerprints.json",
+                "../../../Phase 1/code/python/fingerprints.json",
+                "../../Phase 1/code/python/fingerprints.json",
+                "code/python/fingerprints.json",
+                "../python/fingerprints.json",
+                "../../code/python/fingerprints.json"
+            });
 
         if (impl_->db->connect()) {
             std::cout << Color::GREEN << "[+] Connected to Redis on "

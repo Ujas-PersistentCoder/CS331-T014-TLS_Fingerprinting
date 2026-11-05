@@ -85,7 +85,8 @@ def build(out):
     command(["cmake", "--build", dependency_build, "--target", "ssl", "crypto", "-j", "4"], log)
     command(["cmake", "-S", LAB, "-B", LOCAL / "build", "-GNinja", "-DCMAKE_BUILD_TYPE=Release"], log)
     command(["cmake", "--build", LOCAL / "build", "-j", "4"], log)
-    command(["cmake", "-S", REPO / "Phase 2/engine", "-B", LOCAL / "engine-build", "-DCMAKE_BUILD_TYPE=Release"], log)
+    engine_source = REPO / "Phase 2/code/engine" if (REPO / "Phase 2/code/engine").exists() else REPO / "Phase 2/engine"
+    command(["cmake", "-S", engine_source, "-B", LOCAL / "engine-build", "-DCMAKE_BUILD_TYPE=Release"], log)
     command(["cmake", "--build", LOCAL / "engine-build", "-j", "4"], log)
     command(["ctest", "--test-dir", LOCAL / "engine-build", "--output-on-failure"], log)
     write_json(out / "build.json", tools_manifest())
