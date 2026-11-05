@@ -29,9 +29,13 @@ public:
                                              const uint8_t *, size_t)>;
 
     explicit TwoTierAccumulator(HandshakeCallback ready, RecordLimitCallback limit = {},
-                                IssueCallback issue = {}, size_t max_streams = 2048)
+                                IssueCallback issue = {}, size_t max_streams = 2048,
+                                bool enable_ech = true)
         : ready_(std::move(ready)), limit_(std::move(limit)), issue_(std::move(issue)),
-          max_streams_(max_streams) {}
+          max_streams_(max_streams), enable_ech_(enable_ech) {}
+
+    void set_ech_mode(bool enable) noexcept { enable_ech_ = enable; }
+    [[nodiscard]] bool ech_mode() const noexcept { return enable_ech_; }
 
     void process_segment(const FlowKey &, uint32_t seq, const uint8_t *, size_t, time_t);
     void start_flow(const FlowKey &, uint32_t first_data_seq, time_t);
@@ -49,6 +53,7 @@ private:
         bool tls_started{false};
         bool syn_anchored{false};
         std::optional<time_t> waiting_since;
+        time_t last_seen{0};
         std::unique_ptr<FragmentedHandshake> partial;
     };
     void report(const FlowKey &, Stream &, ParseStatus, const char *);
@@ -56,6 +61,7 @@ private:
     RecordLimitCallback limit_;
     IssueCallback issue_;
     size_t max_streams_;
+    bool enable_ech_{true};
     std::unordered_map<FlowKey, Stream, FlowHash> streams_;
 };
 } // namespace tlsfp

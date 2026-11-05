@@ -19,7 +19,7 @@ struct HandshakeJob;
 
 struct CaptureOptions {
     std::string json_filename;
-    size_t max_connections{1024};
+    size_t max_connections{65536};
     double connection_timeout_seconds{30};
     // Empty selects steady_clock. Injection permits deterministic idle tests.
     std::function<double()> monotonic_clock;
@@ -29,6 +29,7 @@ struct CaptureOptions {
     bool verbose{false};
     bool quiet{false};
     bool enable_ja4t{false};
+    bool enable_ech{false};
     bool prompt_unknown{false};
     std::string seed_filename{"code/db/seed_fingerprints.json"};
     std::string manifest_filename{"code/db/capture_manifest.json"};

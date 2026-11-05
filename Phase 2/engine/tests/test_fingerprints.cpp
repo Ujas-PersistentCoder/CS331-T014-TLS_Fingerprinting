@@ -206,6 +206,39 @@ TEST_F(AccumulatorTest, Tier1FastPath_SinglePacketCompleteRecord) {
     EXPECT_EQ(accum.active_flow_count(), 0u);
 }
 
+TEST_F(AccumulatorTest, Tier1FastPath_CoalescedRecords_CCSAndServerHello) {
+    std::vector<uint8_t> ccs = {0x14, 0x03, 0x03, 0x00, 0x01, 0x01};
+    auto sh_record = build_client_hello_record({0x1301}, {});
+    std::vector<uint8_t> coalesced = ccs;
+    coalesced.insert(coalesced.end(), sh_record.begin(), sh_record.end());
+
+    accum.process_segment(test_key, 1000, coalesced.data(), coalesced.size(), 100000);
+
+    ASSERT_EQ(received_records.size(), 2u);
+    EXPECT_EQ(received_records[0], ccs);
+    EXPECT_EQ(received_records[1], sh_record);
+    EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
+TEST_F(AccumulatorTest, Tier1FastPath_CoalescedRecords_WithPartialTail) {
+    std::vector<uint8_t> ccs = {0x14, 0x03, 0x03, 0x00, 0x01, 0x01};
+    auto sh_record = build_client_hello_record({0x1301, 0x1302, 0x1303}, padding_extensions(500));
+
+    std::vector<uint8_t> seg1 = ccs;
+    seg1.insert(seg1.end(), sh_record.begin(), sh_record.begin() + 200);
+    std::vector<uint8_t> seg2(sh_record.begin() + 200, sh_record.end());
+
+    accum.process_segment(test_key, 1000, seg1.data(), seg1.size(), 100000);
+    EXPECT_EQ(received_records.size(), 1u);
+    EXPECT_EQ(received_records[0], ccs);
+    EXPECT_EQ(accum.active_flow_count(), 1u);
+
+    accum.process_segment(test_key, 1000 + seg1.size(), seg2.data(), seg2.size(), 100001);
+    EXPECT_EQ(received_records.size(), 2u);
+    EXPECT_EQ(received_records[1], sh_record);
+    EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
 TEST_F(AccumulatorTest, Tier2SlowPath_TwoSegmentReassembly) {
     auto tls_record = build_client_hello_record({0x1301, 0x1302, 0x1303}, padding_extensions(500));
 
@@ -240,6 +273,42 @@ TEST_F(AccumulatorTest, StaleFlowCleanup) {
     // Post-timeout (> 10s): Stale fragmented flow is evicted
     accum.cleanup_stale_flows(start_time + 15);
     EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
+TEST(AccumulatorCapacityTest, SequentialFragmentedFlowsCleanedUpUnderCapacityLimit) {
+    std::vector<std::vector<uint8_t>> records;
+    TwoTierAccumulator accum([&](const FlowKey &, const uint8_t *d, size_t len) {
+        records.emplace_back(d, d + len);
+    }, {}, {}, 2, false); // Standalone idle eviction belongs to ECH-off mode.
+
+    FlowKey k1 = make_ipv4_key("10.0.0.1", "10.0.0.2", 1001, 443);
+    FlowKey k2 = make_ipv4_key("10.0.0.1", "10.0.0.2", 1002, 443);
+    FlowKey k3 = make_ipv4_key("10.0.0.1", "10.0.0.2", 1003, 443);
+
+    auto r1 = build_client_hello_record({0x1301}, padding_extensions(300));
+    auto r2 = build_client_hello_record({0x1302}, padding_extensions(300));
+    auto r3 = build_client_hello_record({0x1303}, padding_extensions(300));
+
+    // Flow 1 at t=0 (fragmented)
+    accum.process_segment(k1, 1000, r1.data(), 150, 0);
+    accum.process_segment(k1, 1150, r1.data() + 150, r1.size() - 150, 0);
+    ASSERT_EQ(records.size(), 1u);
+
+    // 100 seconds later, cleanup sweeps idle/completed flows
+    accum.cleanup_stale_flows(100);
+
+    // Flow 2 at t=100 (fragmented)
+    accum.process_segment(k2, 1000, r2.data(), 150, 100);
+    accum.process_segment(k2, 1150, r2.data() + 150, r2.size() - 150, 100);
+    ASSERT_EQ(records.size(), 2u);
+
+    // 100 seconds later, cleanup sweeps idle/completed flows
+    accum.cleanup_stale_flows(200);
+
+    // Flow 3 at t=200 (fragmented) - must not fail from capacity exhaustion
+    accum.process_segment(k3, 1000, r3.data(), 150, 200);
+    accum.process_segment(k3, 1150, r3.data() + 150, r3.size() - 150, 200);
+    EXPECT_EQ(records.size(), 3u);
 }
 
 TEST_F(AccumulatorTest, GRO_On_ProcessesJumboFrame) {

@@ -96,6 +96,30 @@ TEST_F(ConnectionTest, RetransmittedHellosAndSynDoNotDuplicateOrReset) {
     EXPECT_TRUE(engine->finish_capture()); EXPECT_EQ(rows().size(), 1u);
     EXPECT_EQ(engine->stats().client_hellos, 1u); EXPECT_EQ(engine->stats().server_hellos, 1u);
 }
+
+TEST_F(ConnectionTest, DelayedRetransmissionKeepsWatermarkUntilConnectionExpires) {
+    start(); send(client());
+    now = 6; engine->maintenance();
+    send(client()); // Same sequence and bytes, after the 3-second record timeout.
+    EXPECT_EQ(engine->stats().client_hellos, 1u);
+    send(server(), true, 1000);
+    ASSERT_EQ(rows().size(), 1u);
+    EXPECT_NE(rows()[0].find("\"complete_hello_pair\":true"), std::string::npos);
+    EXPECT_EQ(rows()[0].find("unexpected_additional_client_hello"), std::string::npos);
+}
+
+TEST_F(ConnectionTest, TimedOutDirectionCannotResumeInsideRetainedConnection) {
+    start(); const auto ch = client();
+    send(Bytes(ch.begin(), ch.begin() + 30));
+    now = 4; engine->maintenance(); // Release the partial record and stop framing.
+    now = 8; engine->maintenance(); // The connection is still within its 30-second lifetime.
+    send(ch);
+    EXPECT_EQ(engine->stats().client_hellos, 0u);
+    send(server(), true, 1000);
+    ASSERT_EQ(rows().size(), 1u);
+    EXPECT_NE(rows()[0].find("record_timeout"), std::string::npos);
+    EXPECT_NE(rows()[0].find("\"complete_hello_pair\":false"), std::string::npos);
+}
 TEST_F(ConnectionTest, SynWithPayloadConsumesOneSequenceNumber) {
     send(client(), false, 99, TH_SYN); send(server(), true, 1000);
     ASSERT_EQ(rows().size(), 1u);
