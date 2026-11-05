@@ -120,6 +120,12 @@ bool parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
                 break;
             }
 
+            // Extension 0x0033: Key Share (PQ-TLS)
+            case 0x0033: {
+                parse_pqtls_client_key_share(reader, out.pqtls);
+                break;
+            }
+
             // Extension 0x002b: Supported Versions (TLS 1.3)
             case 0x002b: {
                 uint8_t versions_len = 0;
@@ -162,6 +168,12 @@ bool parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
         out.extensions.push_back(ext_type);
 
         switch (ext_type) {
+            // Extension 0x0033: Key Share (PQ-TLS)
+            case 0x0033: {
+                parse_pqtls_server_key_share(reader, out.pqtls);
+                break;
+            }
+
             // Extension 0x002b: Supported Versions in ServerHello is exactly 2 bytes
             case 0x002b: {
                 if (ext_len != 2 || version_seen) return false;
@@ -311,6 +323,9 @@ bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloDat
     // unknown presence unless an ECH type/length header was actually observed.
     if (!out.ech.present.has_value()) out.ech.present = false;
     analyze_ech(out.ech);
+
+    // PQ-TLS group scan (post-extension pass, order-independent)
+    find_pqtls_group(out.extensions, out.supported_groups, out.pqtls);
     return true;
 }
 
@@ -350,6 +365,7 @@ bool parse_server_hello(const uint8_t *record, size_t record_len, ServerHelloDat
         0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
         0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c}};
     out.is_hrr = *out.random == hrr;
+    out.pqtls.is_hrr = out.is_hrr;
     uint8_t session_length = 0, compression = 0;
     if (!hello.read_u8(session_length) || session_length > 32 || !hello.skip(session_length) ||
         !hello.read_u16_be(out.selected_cipher) || !hello.read_u8(compression))

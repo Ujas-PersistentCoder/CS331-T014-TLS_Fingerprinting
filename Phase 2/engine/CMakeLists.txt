@@ -48,6 +48,8 @@ add_library(tlsfp_phase2_lib STATIC
     src/ja4.cpp
     src/ja4t.cpp
     src/db.cpp
+    src/pqtls_parser.cpp
+    src/pqtls_analysis.cpp
 )
 
 target_include_directories(tlsfp_phase2_lib
@@ -142,6 +144,8 @@ add_executable(unit_tests
     tests/test_ech_parser.cpp
     tests/test_ech_analysis.cpp
     tests/test_ech_connections.cpp
+    tests/test_pqtls_parser.cpp
+    tests/test_pqtls_analysis.cpp
 )
 
 target_compile_definitions(unit_tests PRIVATE

@@ -4,6 +4,7 @@
 #include "tlsfp/types.hpp"
 #include "tlsfp/byte_reader.hpp"
 #include "tlsfp/ech_parser.hpp"
+#include "tlsfp/pqtls_parser.hpp"
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -38,6 +39,8 @@ struct ClientHelloData {
     std::string_view sni;        // Zero-copy view into packet buffer
     std::string_view first_alpn; // First ALPN protocol as sent (GREASE included, per JA4 spec)
 
+    PqtlsClientObservation pqtls; // PQ-TLS key exchange observation
+
     void clear() noexcept {
         parse_status = ParseStatus::NotExamined;
         parse_detail = "not examined";
@@ -53,6 +56,7 @@ struct ClientHelloData {
         has_sni = false;
         sni = {};
         first_alpn = {};
+        pqtls.clear();
     }
 };
 
@@ -70,6 +74,8 @@ struct ServerHelloData {
     std::vector<uint16_t> extensions; // Wire order, GREASE included (JA4S); JA3S filters GREASE
     std::string_view first_alpn;
 
+    PqtlsServerObservation pqtls; // PQ-TLS key exchange observation
+
     void clear() noexcept {
         parse_status = ParseStatus::NotExamined;
         parse_detail = "not examined";
@@ -80,6 +86,7 @@ struct ServerHelloData {
         selected_cipher = 0;
         extensions.clear();
         first_alpn = {};
+        pqtls.clear();
     }
 };
 

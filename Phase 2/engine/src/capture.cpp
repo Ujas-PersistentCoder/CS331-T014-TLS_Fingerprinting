@@ -5,6 +5,7 @@
 #include "tlsfp/ja4.hpp"
 #include "tlsfp/db.hpp"
 #include "tlsfp/ja4t.hpp"
+#include "tlsfp/pqtls_analysis.hpp"
 #include <mutex>
 #include <array>
 #include <vector>
@@ -207,6 +208,41 @@ void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s,
               << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-JA4S-Raw]    " << Color::RESET
               << Color::DIM << "c: [" << ja4s.raw_ja4_c << "]" << Color::RESET << "\n";
+}
+
+// --- PQ-TLS Verbose Output ---
+
+void print_pqtls_client(const ClientHelloData &ch, PqtlsShareMode mode) {
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Offer]  " << Color::RESET
+              << (ch.pqtls.pq_group != 0 ? Color::MAGENTA : Color::GRAY)
+              << pqtls_offer_text(ch.pqtls) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Keys]   " << Color::RESET
+              << pqtls_keys_text(ch.pqtls) << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Share]  " << Color::RESET
+              << (mode == PqtlsShareMode::PROACTIVE_SHARE_VALID ? Color::GREEN : Color::YELLOW)
+              << pqtls_share_mode_name(mode) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Check]  " << Color::RESET
+              << (pqtls_client_findings(ch.pqtls) == PQTLS_FINDING_NONE ? Color::GRAY : Color::RED)
+              << pqtls_client_check_text(ch.pqtls) << Color::RESET << "\n";
+}
+
+void print_pqtls_server(const ServerHelloData &sh, PqtlsPosture posture) {
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Group]  " << Color::RESET
+              << (is_pqtls_group(sh.pqtls.selected_group) ? Color::MAGENTA : Color::GRAY)
+              << pqtls_server_text(sh.pqtls) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Result] " << Color::RESET
+              << (posture == PqtlsPosture::HYBRID_SELECTED_OBSERVED ? Color::GREEN : Color::YELLOW)
+              << pqtls_posture_name(posture) << Color::RESET << "\n"
+              << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-PQTLS-Check]  " << Color::RESET
+              << (pqtls_server_findings(sh.pqtls) == PQTLS_FINDING_NONE ? Color::GRAY : Color::RED)
+              << pqtls_server_check_text(sh.pqtls) << Color::RESET << "\n";
 }
 
 void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf, bool server_side) {
@@ -565,6 +601,7 @@ struct WorkerContext {
     SPSCQueue<HandshakeJob, 2048> queue;
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
+    PqtlsOfferTable pqtls_offers;  // PQ-TLS: per worker, no lock needed
     std::thread thread;
 };
 
@@ -1805,6 +1842,13 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
             } else {
                 stats_.client_hellos.fetch_add(1, std::memory_order_relaxed);
             }
+
+            // PQ-TLS: second ClientHello after an HRR on the same flow
+            bool after_hrr = ctx.pqtls_offers.after_hrr(key);
+            PqtlsShareMode share_mode = pqtls_share_mode(ctx.client_scratchpad.pqtls, after_hrr);
+
+            // PQ-TLS: store offer for ServerHello correlation (post-HRR hello overwrites)
+            ctx.pqtls_offers.store(key, make_pqtls_offer(ctx.client_scratchpad.pqtls));
             JA3Fingerprint ja3 = compute_ja3(ctx.client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx.client_scratchpad);
 
@@ -1848,6 +1892,7 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
 
             if (options_.verbose) {
                 print_verbose_client(ctx.client_scratchpad, ja3, ja4);
+                print_pqtls_client(ctx.client_scratchpad, share_mode);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
@@ -1855,7 +1900,18 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         if (parse_server_hello(record_data, record_len, ctx.server_scratchpad)) {
-            if (ctx.server_scratchpad.is_hrr) return;
+            // PQ-TLS: correlate with client offer (final ServerHello evicts, HRR keeps)
+            PqtlsOffer offer = ctx.pqtls_offers.take(key, ctx.server_scratchpad.pqtls.is_hrr);
+            PqtlsPosture posture = pqtls_posture(offer, ctx.server_scratchpad.pqtls,
+                                                 ctx.server_scratchpad.selected_version);
+
+            if (ctx.server_scratchpad.is_hrr) {
+                if (options_.verbose && !options_.quiet) {
+                    std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
+                    print_pqtls_server(ctx.server_scratchpad, posture);
+                }
+                return;
+            }
             if (!options_.enable_ech) {
                 stats_.server_hellos.fetch_add(1, std::memory_order_relaxed);
             }
@@ -1901,6 +1957,7 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
 
             if (options_.verbose) {
                 print_verbose_server(ctx.server_scratchpad, ja3s, ja4s);
+                print_pqtls_server(ctx.server_scratchpad, posture);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
