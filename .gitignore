@@ -4,3 +4,4 @@
 build/
 code/pcaps/benchmark/
 .venv_win/
+.local
