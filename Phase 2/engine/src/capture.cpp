@@ -1846,12 +1846,13 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
                 stats_.client_hellos.fetch_add(1, std::memory_order_relaxed);
             }
 
-            // PQ-TLS: second ClientHello after an HRR on the same flow
-            bool after_hrr = ctx.pqtls_offers.after_hrr(key);
-            PqtlsShareMode share_mode = pqtls_share_mode(ctx.client_scratchpad.pqtls, after_hrr);
-
-            // PQ-TLS: store offer for ServerHello correlation (post-HRR hello overwrites)
-            ctx.pqtls_offers.store(key, make_pqtls_offer(ctx.client_scratchpad.pqtls));
+            // PQ-TLS: evaluate share mode and store offer only when enabled
+            PqtlsShareMode share_mode = PqtlsShareMode::NO_PQ_OFFERED;
+            if (options_.enable_pqtls) {
+                bool after_hrr = ctx.pqtls_offers.after_hrr(key);
+                share_mode = pqtls_share_mode(ctx.client_scratchpad.pqtls, after_hrr);
+                ctx.pqtls_offers.store(key, make_pqtls_offer(ctx.client_scratchpad.pqtls));
+            }
             JA3Fingerprint ja3 = compute_ja3(ctx.client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx.client_scratchpad);
 
@@ -1895,7 +1896,9 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
 
             if (options_.verbose) {
                 print_verbose_client(ctx.client_scratchpad, ja3, ja4);
-                print_pqtls_client(ctx.client_scratchpad, share_mode);
+                if (options_.enable_pqtls) {
+                    print_pqtls_client(ctx.client_scratchpad, share_mode);
+                }
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
@@ -1903,13 +1906,16 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         if (parse_server_hello(record_data, record_len, ctx.server_scratchpad)) {
-            // PQ-TLS: correlate with client offer (final ServerHello evicts, HRR keeps)
-            PqtlsOffer offer = ctx.pqtls_offers.take(key, ctx.server_scratchpad.pqtls.is_hrr);
-            PqtlsPosture posture = pqtls_posture(offer, ctx.server_scratchpad.pqtls,
-                                                 ctx.server_scratchpad.selected_version);
+            // PQ-TLS: correlate with client offer only when enabled
+            PqtlsPosture posture = PqtlsPosture::UNKNOWN_SERVER_SELECTION;
+            if (options_.enable_pqtls) {
+                PqtlsOffer offer = ctx.pqtls_offers.take(key, ctx.server_scratchpad.pqtls.is_hrr);
+                posture = pqtls_posture(offer, ctx.server_scratchpad.pqtls,
+                                        ctx.server_scratchpad.selected_version);
+            }
 
             if (ctx.server_scratchpad.is_hrr) {
-                if (options_.verbose && !options_.quiet) {
+                if (options_.enable_pqtls && options_.verbose && !options_.quiet) {
                     char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
                     if (key.ip_version == 4) {
                         inet_ntop(AF_INET, &key.src_ip.v4, src_ip_str, sizeof(src_ip_str));
@@ -1979,7 +1985,9 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
 
             if (options_.verbose) {
                 print_verbose_server(ctx.server_scratchpad, ja3s, ja4s);
-                print_pqtls_server(ctx.server_scratchpad, posture);
+                if (options_.enable_pqtls) {
+                    print_pqtls_server(ctx.server_scratchpad, posture);
+                }
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;

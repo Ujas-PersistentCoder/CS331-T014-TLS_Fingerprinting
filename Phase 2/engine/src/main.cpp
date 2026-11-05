@@ -33,6 +33,8 @@ void print_usage(const char *prog) {
               << "  --json <file>    Create a new JSON Lines file of connection summaries\n"
               << "  -e, --ech        Enable stateful ECH analysis and connection tracking\n"
               << "  --no-ech         Disable ECH analysis (high-throughput line-rate mode, default)\n"
+              << "  -p, --pq         Enable Post-Quantum TLS (PQ-TLS) posture analysis and wire checks\n"
+              << "  --no-pq          Disable Post-Quantum TLS analysis (default)\n"
               << "  -c <catalog>     Load an extra catalog JSON (seed schema, e.g. ja4t / expected_os lab records)\n"
               << "  -h               Show this help message and exit\n";
 }
@@ -51,10 +53,20 @@ int main(int argc, char *argv[]) {
         {"no-ech", no_argument, nullptr, 1002},
         {"enable-ech", no_argument, nullptr, 1001},
         {"disable-ech", no_argument, nullptr, 1002},
+        {"pq", no_argument, nullptr, 'p'},
+        {"pqtls", no_argument, nullptr, 'p'},
+        {"no-pq", no_argument, nullptr, 1003},
+        {"no-pqtls", no_argument, nullptr, 1003},
         {nullptr, 0, nullptr, 0}
     };
-    while ((opt = getopt_long(argc, argv, "r:i:f:c:etvquj:h", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "r:i:f:c:etvquj:hp", long_options, nullptr)) != -1) {
         switch (opt) {
+            case 'p':
+                options.enable_pqtls = true;
+                break;
+            case 1003:
+                options.enable_pqtls = false;
+                break;
             case 1000:
                 if (!*optarg) {
                     std::cerr << "Error: --json requires a nonempty output filename.\n";
