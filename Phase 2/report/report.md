@@ -53,7 +53,7 @@ Ujas Devang Shah (24110376); Satyakam Mishra (24110318); Pranjal Goyal (24110274
 
 ## I. Introduction
 
-TLS encrypts application data, but its initial handshake exposes some protocol choices. A passive observer can extract these choices from ClientHello and ServerHello messages and summarize them as fingerprints. A fingerprint describes visible behavior shared by a TLS stack or configuration; it does not prove the identity of an application or device.
+TLS encrypts application data, but its initial handshake exposes some protocol choices. A passive observer can extract these choices from ClientHello and ServerHello messages [[6]](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.1), [[7]](https://www.rfc-editor.org/rfc/rfc5246.html#section-7.4.1) and summarize them as fingerprints. A fingerprint describes visible behavior shared by a TLS stack or configuration; it does not prove the identity of an application or device.
 
 Phase 1 provided Python and C++ fingerprinting implementations and a reference catalog. Phase 2 develops the C++ engine into a modular TCP/TLS monitor with worker threads, bounded record accumulation, transport fingerprints, Encrypted ClientHello (ECH) observations, and post-quantum (PQ) key-share inspection [1]. Our evaluation combines known-answer tests, saved traffic, synthetic controls, and endpoint-labeled ECH experiments. It also exposes limits: ECH fields add no profile discrimination in the supplied controlled corpus, and stateful tracking can miss a later hello after a sequence gap.
 
@@ -118,7 +118,7 @@ JA3 serializes five ClientHello fields:
 legacy_version,cipher_suites,extension_types,supported_groups,ec_point_formats
 ```
 
-Numeric values are written in decimal; list values are separated by hyphens, empty fields are retained, and MD5 produces the final hash. Reserved GREASE values are filtered from the applicable 16-bit fields. GREASE deliberately exercises protocol extensibility. The remaining list order is preserved, so browser extension permutation can change JA3. JA3S uses the server's legacy version, selected cipher, and ordered non-GREASE extensions. MD5 is required for compatibility here; it supplies no identity or security proof.
+Numeric values are written in decimal; list values are separated by hyphens, empty fields are retained, and MD5 produces the final hash. Reserved GREASE values are filtered from the applicable 16-bit fields. GREASE deliberately exercises protocol extensibility [[8]](https://www.rfc-editor.org/rfc/rfc8701.html#section-1). The remaining list order is preserved, so browser extension permutation can change JA3. JA3S uses the server's legacy version, selected cipher, and ordered non-GREASE extensions. MD5 is required for compatibility here; it supplies no identity or security proof.
 
 JA4 combines a readable prefix with two 12-hex-digit SHA-256 prefixes. The prefix encodes TCP, the highest non-GREASE offered version, server name indication (SNI) extension presence, cipher and extension counts, and two characters derived from the first application-layer protocol negotiation (ALPN) value. Cipher IDs and selected extension IDs are sorted for hashing; SNI and ALPN are excluded from the extension hash, while signature algorithms retain wire order. JA4S uses the selected cipher and hashes server extensions in wire order, including GREASE. HelloRetryRequest (HRR) is recognized separately and excluded from ordinary server fingerprints. With ECH, the client fingerprints describe the visible outer hello [2].
 
@@ -132,11 +132,11 @@ JA4 combines a readable prefix with two 12-hex-digit SHA-256 prefixes. The prefi
 | PQ inspection | Read group IDs, share lengths and server selection | Does not validate key contents or completed key exchange |
 | JSON Lines | Version 1 TLS/ECH connection summaries and transport issues | No unified JA4T/PQ posture record |
 
-JA4T has the form `window_option-kinds_MSS_window-scale`; TTL is used alongside it. The engine can report `IMPERSONATION_MISMATCH`, `TTL_MISMATCH`, and `STACK_ANOMALY`. An impersonation mismatch requires an OS-specific `expected_os` catalog entry. A generic Chrome fingerprint does not establish Windows identity. The TTL check tolerates a one-hop difference. Proxies and crafted TCP/IP headers further limit interpretation [3].
+TCP header fields, options and connection setup are specified in RFC 9293 [[10]](https://www.rfc-editor.org/rfc/rfc9293.html#section-3). JA4T has the form `window_option-kinds_MSS_window-scale`; TTL is used alongside it. The engine can report `IMPERSONATION_MISMATCH`, `TTL_MISMATCH`, and `STACK_ANOMALY`. An impersonation mismatch requires an OS-specific `expected_os` catalog entry. A generic Chrome fingerprint does not establish Windows identity. The TTL check tolerates a one-hop difference. Proxies and crafted TCP/IP headers further limit interpretation [3].
 
-ECH encrypts a private inner ClientHello, including the intended server name, while leaving an outer hello visible. Extension `0xfe0d` is decoded with nested length checks. Findings include duplicates, an external inner marker, forbidden outer-extension references, and inappropriate empty encapsulation. Missing information remains unknown. TLS 1.3 alone does not establish acceptance; a completely observed older negotiation can establish non-acceptance. Positive ECH acceptance in our experiment comes from separate endpoint logs. A complete hello pair is only a parsing/correlation result [4].
+ECH encrypts a private inner ClientHello, including the intended server name, while leaving an outer hello visible [[9]](https://www.rfc-editor.org/rfc/rfc9849.html#section-3.2). Extension `0xfe0d` is decoded with nested length checks. Findings include duplicates, an external inner marker, forbidden outer-extension references, and inappropriate empty encapsulation. Missing information remains unknown. TLS 1.3 alone does not establish acceptance; a completely observed older negotiation can establish non-acceptance. Positive ECH acceptance in our experiment comes from separate endpoint logs. A complete hello pair is only a parsing/correlation result [4].
 
-PQ inspection distinguishes advertised capabilities in `supported_groups` from the bytes actually offered in `key_share`. It recognizes hybrid groups `0x11ec`, `0x11eb`, `0x11ed` and historical draft IDs `0x6399`/`0x639a`. For example, the engine checks X25519MLKEM768 shares against 1,216 client bytes and 1,120 server bytes. Malformed framing, wrong recognized lengths, and duplicate relevant extensions are flagged. Worker-local offer tables correlate client offers with server choices; their size is bounded, but they have no time or FIN/RST expiry. Reported hybrid selection is a wire observation, not proof of quantum security [5].
+PQ inspection distinguishes advertised capabilities in `supported_groups` from the bytes actually offered in `key_share` [[6]](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.8). It recognizes hybrid groups `0x11ec`, `0x11eb`, `0x11ed` and historical draft IDs `0x6399`/`0x639a`. For example, the engine checks X25519MLKEM768 shares against 1,216 client bytes and 1,120 server bytes. Malformed framing, wrong recognized lengths, and duplicate relevant extensions are flagged. Worker-local offer tables correlate client offers with server choices; their size is bounded, but they have no time or FIN/RST expiry. Reported hybrid selection is a wire observation, not proof of quantum security [5].
 
 ### C. Controls and output
 
@@ -266,6 +266,16 @@ The ECH `report` command recomputes the original saved evidence. `replay` separa
 [4] Team T014, “Reduced ECH checkpoint 3 experiment,” 2026. [Method, endpoint implementation, analysis and public evidence](https://github.com/Ujas-PersistentCoder/TLS-Fingerprinting/tree/2f4a78bbf49b4b8e91ca919ecad86b9b79aa7ff1/Phase%202/code/experiments/ech). Original collection engine `dd3860a`; pinned BoringSSL revision recorded in its manifests.
 
 [5] Team T014, “PQ-TLS checkpoint 2,” 2026. [Checkpoint evidence and limitations](https://github.com/Ujas-PersistentCoder/TLS-Fingerprinting/blob/2f4a78bbf49b4b8e91ca919ecad86b9b79aa7ff1/Phase%202/report/docs/PQTLS_Checkpoint_2_Testing.md), with current `pqtls_parser` and `pqtls_analysis` source/tests in [2]. Historical checkpoint counts are distinct from this report's baseline results.
+
+[6] E. Rescorla, “[The Transport Layer Security (TLS) Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446.html),” RFC 8446, August 2018. Sections 4.1, 4.2.7–4.2.8 and 5 describe hello messages, supported groups, key shares and record framing.
+
+[7] T. Dierks and E. Rescorla, “[The Transport Layer Security (TLS) Protocol Version 1.2](https://www.rfc-editor.org/rfc/rfc5246.html),” RFC 5246, August 2008. Sections 6.2 and 7.4.1 describe record framing and hello messages.
+
+[8] D. Benjamin, “[Applying Generate Random Extensions And Sustain Extensibility (GREASE) to TLS Extensibility](https://www.rfc-editor.org/rfc/rfc8701.html),” RFC 8701, January 2020.
+
+[9] E. Rescorla, K. Oku, N. Sullivan and C. A. Wood, “[TLS Encrypted Client Hello](https://www.rfc-editor.org/rfc/rfc9849.html),” RFC 9849, March 2026. Sections 3.2, 5 and 6.1.4 describe inner/outer hellos, the ECH extension and acceptance checks.
+
+[10] W. Eddy, Ed., “[Transmission Control Protocol (TCP)](https://www.rfc-editor.org/rfc/rfc9293.html),” RFC 9293, August 2022. Sections 3.1–3.5 describe TCP headers, options, sequence numbers and connection setup.
 
 ## Appendix A Team Work Distribution and Member Rating
 
