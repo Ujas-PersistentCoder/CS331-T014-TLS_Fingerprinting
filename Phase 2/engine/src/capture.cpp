@@ -667,6 +667,7 @@ struct CaptureEngine::Impl {
     std::string capture_id;
     uint64_t next_id{0}, recency{0}, watermark_us{0};
     double now{0}, next_sweep{-1};
+    time_t last_accumulator_cleanup{0};
     int json_fd{-1};
     bool failed{false};
 
@@ -1356,8 +1357,24 @@ void CaptureEngine::ingest_tcp_segment(const FlowKey &key, uint32_t seq, uint8_t
     if (impl_->failed) return;
     if (!options_.enable_ech) {
         if (truncated) return;
-        accumulator_->process_segment(key, seq + ((flags & TH_SYN) ? 1 : 0), payload,
-                                      length, static_cast<time_t>(timestamp_us / 1000000));
+        const time_t now = static_cast<time_t>(timestamp_us / 1000000);
+        if (now > impl_->last_accumulator_cleanup) {
+            impl_->last_accumulator_cleanup = now;
+            accumulator_->cleanup_stale_flows(now);
+        }
+        if (flags & (TH_FIN | TH_RST)) {
+            if (payload && length) {
+                accumulator_->process_segment(key, seq, payload, length, now);
+            }
+            accumulator_->forget_flow(key);
+            accumulator_->forget_flow(reverse_flow(key));
+            return;
+        }
+        if ((flags & TH_SYN) && !(flags & TH_ACK)) {
+            accumulator_->forget_flow(key);
+            accumulator_->forget_flow(reverse_flow(key));
+        }
+        accumulator_->process_segment(key, seq + ((flags & TH_SYN) ? 1 : 0), payload, length, now);
         return;
     }
     impl_->watermark_us = std::max(impl_->watermark_us, timestamp_us);
@@ -1522,9 +1539,9 @@ void CaptureEngine::process_hello(const FlowKey &key,
         if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
             if (parse_client_hello(record_data, record_len, impl_->client_scratchpad)) {
                 stats_.client_hellos++;
-                if (options_.quiet) return;
                 JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
                 JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
+                if (options_.quiet) return;
                 char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
                 if (key.ip_version == 4) {
                     inet_ntop(AF_INET, &key.src_ip.v4, src_ip_str, sizeof(src_ip_str));
@@ -1555,9 +1572,9 @@ void CaptureEngine::process_hello(const FlowKey &key,
             if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {
                 if (impl_->server_scratchpad.is_hrr) return;
                 stats_.server_hellos++;
-                if (options_.quiet) return;
                 JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
                 JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
+                if (options_.quiet) return;
                 char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
                 if (key.ip_version == 4) {
                     inet_ntop(AF_INET, &key.src_ip.v4, src_ip_str, sizeof(src_ip_str));
@@ -1627,10 +1644,10 @@ void CaptureEngine::process_hello(const FlowKey &key,
                     (connection.syn_seq[direction] ? HelloRole::Initial : HelloRole::Unknown));
                 return;
             }
-            if (options_.quiet) return;
 
             JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
+            if (options_.quiet) return;
 
             char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
             if (key.ip_version == 4) {
@@ -1714,10 +1731,10 @@ void CaptureEngine::process_hello(const FlowKey &key,
                 dispatch_handshake(key, record_data, record_len);
                 return;
             }
-            if (options_.quiet) return;
 
             JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
+            if (options_.quiet) return;
 
             char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
             if (key.ip_version == 4) {
@@ -1784,7 +1801,6 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
             } else {
                 stats_.client_hellos.fetch_add(1, std::memory_order_relaxed);
             }
-            if (options_.quiet && !options_.enable_ja4t) return;
             JA3Fingerprint ja3 = compute_ja3(ctx.client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx.client_scratchpad);
 
@@ -1839,7 +1855,6 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
             if (!options_.enable_ech) {
                 stats_.server_hellos.fetch_add(1, std::memory_order_relaxed);
             }
-            if (options_.quiet && !options_.enable_ja4t) return;
             JA3Fingerprint ja3s = compute_ja3s(ctx.server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(ctx.server_scratchpad);
 

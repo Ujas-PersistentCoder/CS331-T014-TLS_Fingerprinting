@@ -206,6 +206,39 @@ TEST_F(AccumulatorTest, Tier1FastPath_SinglePacketCompleteRecord) {
     EXPECT_EQ(accum.active_flow_count(), 0u);
 }
 
+TEST_F(AccumulatorTest, Tier1FastPath_CoalescedRecords_CCSAndServerHello) {
+    std::vector<uint8_t> ccs = {0x14, 0x03, 0x03, 0x00, 0x01, 0x01};
+    auto sh_record = build_client_hello_record({0x1301}, {});
+    std::vector<uint8_t> coalesced = ccs;
+    coalesced.insert(coalesced.end(), sh_record.begin(), sh_record.end());
+
+    accum.process_segment(test_key, 1000, coalesced.data(), coalesced.size(), 100000);
+
+    ASSERT_EQ(received_records.size(), 2u);
+    EXPECT_EQ(received_records[0], ccs);
+    EXPECT_EQ(received_records[1], sh_record);
+    EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
+TEST_F(AccumulatorTest, Tier1FastPath_CoalescedRecords_WithPartialTail) {
+    std::vector<uint8_t> ccs = {0x14, 0x03, 0x03, 0x00, 0x01, 0x01};
+    auto sh_record = build_client_hello_record({0x1301, 0x1302, 0x1303}, padding_extensions(500));
+
+    std::vector<uint8_t> seg1 = ccs;
+    seg1.insert(seg1.end(), sh_record.begin(), sh_record.begin() + 200);
+    std::vector<uint8_t> seg2(sh_record.begin() + 200, sh_record.end());
+
+    accum.process_segment(test_key, 1000, seg1.data(), seg1.size(), 100000);
+    EXPECT_EQ(received_records.size(), 1u);
+    EXPECT_EQ(received_records[0], ccs);
+    EXPECT_EQ(accum.active_flow_count(), 1u);
+
+    accum.process_segment(test_key, 1000 + seg1.size(), seg2.data(), seg2.size(), 100001);
+    EXPECT_EQ(received_records.size(), 2u);
+    EXPECT_EQ(received_records[1], sh_record);
+    EXPECT_EQ(accum.active_flow_count(), 0u);
+}
+
 TEST_F(AccumulatorTest, Tier2SlowPath_TwoSegmentReassembly) {
     auto tls_record = build_client_hello_record({0x1301, 0x1302, 0x1303}, padding_extensions(500));
 

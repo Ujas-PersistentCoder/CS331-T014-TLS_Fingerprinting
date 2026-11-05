@@ -48,14 +48,17 @@ void TwoTierAccumulator::invalidate_flow(const FlowKey &key, const char *reason,
 void TwoTierAccumulator::process_segment(const FlowKey &key, uint32_t seq,
                                          const uint8_t *payload, size_t length, time_t now) {
     if (!payload || length == 0) return;
-    if (!enable_ech_ && length >= 5 && tls_type(payload[0]) && payload[1] == 3 && payload[2] <= 4) {
-        if (streams_.empty() || streams_.find(key) == streams_.end()) {
+    if (!enable_ech_ && (streams_.empty() || streams_.find(key) == streams_.end())) {
+        while (length >= 5 && tls_type(payload[0]) && payload[1] == 3 && payload[2] <= 4) {
             const size_t total = 5 + (size_t{payload[3]} << 8) + payload[4];
-            if (length >= total && total <= ACCUMULATOR_BUFFER_SIZE) {
-                if (ready_) ready_(key, payload, total);
-                return;
-            }
+            if (total > ACCUMULATOR_BUFFER_SIZE) break;
+            if (length < total) break; // Partial record tail; fall through to stream assembly
+            if (ready_) ready_(key, payload, total);
+            payload += total;
+            seq += static_cast<uint32_t>(total);
+            length -= total;
         }
+        if (length == 0) return;
     }
     auto it = streams_.find(key);
     if (it == streams_.end()) {
