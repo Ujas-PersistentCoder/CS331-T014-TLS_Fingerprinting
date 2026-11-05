@@ -18,16 +18,18 @@ inline void append_padded2(std::string &out, unsigned val) {
  * timestamps follows tcp_options_write() (MSS, NOP-NOP-SACK_PERM, NOP-WS).
  */
 struct LayoutSignature {
-    std::array<uint8_t, 8> kinds;
+    std::array<uint8_t, 10> kinds;
     uint8_t count;
     OsFamily family;
 };
 
 constexpr LayoutSignature KNOWN_LAYOUTS[] = {
-    {{2, 4, 8, 1, 3},       5, OsFamily::Linux},   // Linux / Android (timestamps on, default)
-    {{2, 1, 1, 4, 1, 3},    6, OsFamily::Linux},   // Linux with net.ipv4.tcp_timestamps=0
-    {{2, 1, 3, 1, 1, 8, 4}, 7, OsFamily::Apple},   // macOS / iOS (followed by 2x EOL)
-    {{2, 1, 3, 1, 1, 4},    6, OsFamily::Windows}, // Windows 10 / 11 (timestamps off)
+    {{2, 4, 8, 1, 3},             5, OsFamily::Linux},    // Linux / Android (timestamps on, default)
+    {{2, 1, 1, 4, 1, 3},          6, OsFamily::Linux},    // Linux with net.ipv4.tcp_timestamps=0
+    {{2, 1, 3, 1, 1, 8, 4},       7, OsFamily::Apple},    // macOS / iOS (followed by 2x EOL)
+    {{2, 1, 3, 1, 1, 4},          6, OsFamily::Windows},  // Windows 10 / 11 (timestamps off, default)
+    {{2, 1, 3, 1, 1, 8, 1, 1, 4}, 9, OsFamily::Windows},  // Windows with RFC 1323 timestamps on
+    {{2, 1, 3, 4, 8},             5, OsFamily::UnixLike}, // FreeBSD / OpenBSD default
 };
 
 OsFamily classify_layout(const TcpSynData &syn) noexcept {
@@ -122,6 +124,9 @@ bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, T
         } else if (kind == TCP_OPT_WINDOW_SCALE && len == 3) {
             parsed.has_window_scale = true;
             parsed.window_scale = opts[i + 2];
+            if (parsed.window_scale > 14) {
+                parsed.malformed_options = true; // RFC 7323: window scale shift > 14 is invalid
+            }
         }
         i += len;
     }
@@ -242,6 +247,35 @@ const char *tcp_option_name(uint8_t kind) noexcept {
         case 34: return "TFO";
         default: return nullptr;
     }
+}
+
+std::string describe_path_mtu(bool has_mss, uint16_t mss) {
+    if (!has_mss) return "MSS absent (Path MTU undetermined)";
+    uint32_t mtu = static_cast<uint32_t>(mss) + 40; // IPv4 + TCP baseline
+    if (mss == 1460) {
+        return "MSS 1460 → Link MTU 1500 (Standard Ethernet / Wi-Fi wire)";
+    }
+    if (mss == 1452) {
+        return "MSS 1452 → Link MTU 1492 (PPPoE / DSL encapsulation)";
+    }
+    if (mss >= 1350 && mss < 1460) {
+        return "MSS " + std::to_string(mss) + " → Link MTU " + std::to_string(mtu) +
+               " (VPN / Tunnel encapsulation e.g. WireGuard/IPsec/OpenVPN or Cellular 4G/5G)";
+    }
+    if (mss > 1500) {
+        return "MSS " + std::to_string(mss) + " → Link MTU " + std::to_string(mtu) +
+               " (Jumbo Frames / Cloud VPC / Datacenter Fabric)";
+    }
+    return "MSS " + std::to_string(mss) + " → Link MTU " + std::to_string(mtu) +
+           " (Constrained MTU / Nested tunnel)";
+}
+
+std::string describe_network_proximity(uint8_t hops) {
+    if (hops == 0) return "Direct Link / Same Subnet (0 hops)";
+    if (hops <= 4) return "Local Metro / Local Cloud Region (1-4 hops)";
+    if (hops <= 12) return "Regional Internet Transit (5-12 hops)";
+    if (hops <= 20) return "Intercontinental / Multi-AS Transit (13-20 hops)";
+    return "Long-distance / Heavily Routed Transit (>20 hops)";
 }
 
 } // namespace tlsfp

@@ -112,6 +112,16 @@ struct OsInference {
  */
 [[nodiscard]] const char *tcp_option_name(uint8_t kind) noexcept;
 
+/**
+ * @brief Describes path MTU and potential tunnel/encapsulation from TCP MSS.
+ */
+[[nodiscard]] std::string describe_path_mtu(bool has_mss, uint16_t mss);
+
+/**
+ * @brief Describes network proximity from estimated hop count.
+ */
+[[nodiscard]] std::string describe_network_proximity(uint8_t hops);
+
 } // namespace tlsfp
 
 #endif // TLSFP_JA4T_HPP

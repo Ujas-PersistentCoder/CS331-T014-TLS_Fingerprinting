@@ -140,6 +140,23 @@ void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s,
 }
 
 void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf) {
+    const std::string ja4t_str = compute_ja4t(syn);
+
+    // Option flags inspection
+    bool has_sack = false;
+    bool has_ts = false;
+    size_t eol_count = 0;
+    for (size_t i = 0; i < syn.option_count; ++i) {
+        if (syn.option_kinds[i] == TCP_OPT_SACK_PERM) has_sack = true;
+        else if (syn.option_kinds[i] == TCP_OPT_TIMESTAMP) has_ts = true;
+        else if (syn.option_kinds[i] == TCP_OPT_EOL) ++eol_count;
+    }
+
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-JA4T-Raw]    " << Color::RESET
+              << Color::BOLD << ja4t_str << Color::RESET << "\n";
+
+    // 1. TCP Options List with friendly names
     std::cout << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-TCP-Opts]    " << Color::RESET << "[";
     for (size_t i = 0; i < syn.option_count; ++i) {
@@ -150,17 +167,55 @@ void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf) {
         else std::cout << static_cast<unsigned>(syn.option_kinds[i]);
         std::cout << Color::RESET;
     }
-    std::cout << "]  " << Color::DIM << "win " << Color::RESET << syn.window_size
-              << Color::DIM << "  mss " << Color::RESET
-              << (syn.has_mss ? std::to_string(syn.mss) : std::string("-"))
-              << Color::DIM << "  ws " << Color::RESET
-              << (syn.has_window_scale ? std::to_string(syn.window_scale) : std::string("-")) << "\n"
-              << Color::GRAY << "   │  " << Color::RESET
-              << Color::CYAN << "[V-TCP-OS]      " << Color::RESET
-              << Color::DIM << "option layout → " << Color::RESET << os_family_name(inf.layout_family)
-              << Color::DIM << ", TTL " << Color::RESET << static_cast<unsigned>(syn.ip_ttl)
-              << Color::DIM << " (initial " << static_cast<unsigned>(inf.initial_ttl) << ") → " << Color::RESET
-              << os_family_name(inf.ttl_family) << "\n";
+    std::cout << "]  " << Color::DIM << "(SACK: " << (has_sack ? "supported" : "off")
+              << ", Timestamps: " << (has_ts ? "enabled" : "disabled")
+              << (eol_count > 0 ? (", EOL padding: " + std::to_string(eol_count) + "B") : "")
+              << ")" << Color::RESET << "\n";
+
+    // 2. Window & Buffering Profile
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Window]  " << Color::RESET
+              << Color::DIM << "raw: " << Color::RESET << syn.window_size;
+    if (syn.has_window_scale && syn.window_scale > 0 && syn.window_scale <= 14) {
+        uint32_t mult = 1U << syn.window_scale;
+        uint64_t max_buf = static_cast<uint64_t>(syn.window_size) * mult;
+        std::cout << Color::DIM << "  scale: " << Color::RESET << static_cast<unsigned>(syn.window_scale)
+                  << Color::DIM << " (multiplier ×" << mult << " → max effective buffer: " 
+                  << (max_buf / 1024) << " KB)" << Color::RESET;
+    } else if (syn.has_window_scale && syn.window_scale == 0) {
+        std::cout << Color::DIM << "  scale: 0 (multiplier ×1)" << Color::RESET;
+    } else {
+        std::cout << Color::DIM << "  (no window scale negotiated: embedded/legacy stack)" << Color::RESET;
+    }
+    std::cout << "\n";
+
+    // 3. Path MTU & Encapsulation
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-MTU]     " << Color::RESET
+              << describe_path_mtu(syn.has_mss, syn.mss) << "\n";
+
+    // 4. Network Distance & Proximity
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Network] " << Color::RESET
+              << Color::DIM << "Observed TTL: " << Color::RESET << static_cast<unsigned>(syn.ip_ttl)
+              << Color::DIM << " | Estimated Initial TTL: " << Color::RESET << static_cast<unsigned>(inf.initial_ttl)
+              << Color::DIM << " → " << Color::RESET << Color::BOLD << static_cast<unsigned>(inf.hops) << " hops " << Color::RESET
+              << Color::DIM << "(" << describe_network_proximity(inf.hops) << ")" << Color::RESET << "\n";
+
+    // 5. OS Stack Deduction & Integrity
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Stack]   " << Color::RESET
+              << Color::DIM << "layout: " << Color::RESET << os_family_name(inf.layout_family)
+              << Color::DIM << " | TTL family: " << Color::RESET << os_family_name(inf.ttl_family)
+              << Color::DIM << " → " << Color::RESET;
+    if (inf.stack_anomaly) {
+        std::cout << Color::YELLOW << Color::BOLD << "ANOMALY: Incompatible layout & TTL (possible spoofing/rewrite)" << Color::RESET;
+    } else if (syn.malformed_options) {
+        std::cout << Color::RED << Color::BOLD << "MALFORMED: Option framing invalid (hand-crafted packet)" << Color::RESET;
+    } else {
+        std::cout << Color::GREEN << os_family_name(inf.family) << " (Corroborated: Clean stack profile)" << Color::RESET;
+    }
+    std::cout << "\n";
 }
 
 void print_alert(const std::string &color, const char *tag, const std::string &message) {
