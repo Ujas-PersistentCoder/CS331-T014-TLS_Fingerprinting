@@ -85,6 +85,29 @@ int main() {
     check(bad_scale.malformed_options && bad_scale.window_scale == 15,
           "Window scale > 14 (RFC 7323): flagged as malformed options");
 
+    TcpSynData ws15 = parse(tcp_header(64240, {2, 4, 0x05, 0xb4, 1, 3, 3, 15, 1, 1, 4, 2}), 128);
+    check(ws15.malformed_options && infer_os(ws15).stack_anomaly, "Window scale > 14 is malformed -> STACK_ANOMALY");
+    check_eq(compute_ja4t(ws15), "64240_2-1-3-1-1-4_1460_15", "Window scale > 14 still fingerprinted as sent");
+
+    check(infer_os(parse(tcp_header(64240, {2, 4, 0x05, 0xb4, 1, 3, 3, 8, 1, 1, 8, 10, 0, 0, 0, 1, 0, 0, 0, 0,
+                                            1, 1, 4, 2}), 128)).family == OsFamily::Windows,
+          "Windows layout with timestamps -> Windows");
+    check(infer_os(parse(tcp_header(65535, {2, 4, 0x05, 0xb4, 1, 3, 3, 6, 4, 2, 8, 10, 0, 0, 0, 1, 0, 0, 0, 0}),
+                         64)).layout_family == OsFamily::UnixLike,
+          "FreeBSD layout -> Unix-like");
+
+    // Path MTU text: IPv6 adds 20 header bytes, loopback is not a jumbo-frame fabric
+    TcpSynData mtu = parse(tcp_header(64240, {2, 4, 0x05, 0xa0}), 64); // MSS 1440
+    check(describe_path_mtu(mtu, false).find("Link MTU 1480") != std::string::npos, "IPv4 MSS 1440 -> MTU 1480");
+    mtu.ipv6 = true;
+    check(describe_path_mtu(mtu, false).find("Link MTU 1500 over IPv6 (Standard Ethernet") != std::string::npos,
+          "IPv6 MSS 1440 -> standard 1500 MTU, not a tunnel");
+    mtu = parse(tcp_header(65495, {2, 4, 0xff, 0xd7}), 64); // MSS 65495
+    check(describe_path_mtu(mtu, false).find("Loopback") != std::string::npos, "IPv4 MSS 65495 -> loopback");
+    mtu = parse(tcp_header(1400, {2, 4, 0x05, 0x78}), 52); // MSS 1400 from a CDN
+    check(describe_path_mtu(mtu, true).find("server-side MSS clamping") != std::string::npos,
+          "Reduced server MSS is described as clamping, not as a VPN");
+
     check(!parse(tcp_header(64240, WINDOWS_OPTS), 128).malformed_options, "Stock Windows SYN is not malformed");
     check(!parse(tcp_header(65535, MACOS_OPTS), 64).malformed_options, "Stock macOS SYN (EOL padded) is not malformed");
 

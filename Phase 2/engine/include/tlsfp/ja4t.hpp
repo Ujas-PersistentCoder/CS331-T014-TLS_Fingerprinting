@@ -34,6 +34,7 @@ constexpr size_t TCP_MAX_OPTIONS_LEN = 40; // 60-byte max header - 20-byte fixed
 struct TcpSynData {
     uint16_t window_size{0};
     uint8_t  ip_ttl{0};             // IPv4 TTL / IPv6 Hop Limit as observed at the sensor
+    bool     ipv6{false};           // Set by the caller: IPv6 headers add 20 bytes to MSS -> MTU
     bool     has_mss{false};
     uint16_t mss{0};
     bool     has_window_scale{false};
@@ -113,9 +114,11 @@ struct OsInference {
 [[nodiscard]] const char *tcp_option_name(uint8_t kind) noexcept;
 
 /**
- * @brief Describes path MTU and potential tunnel/encapsulation from TCP MSS.
+ * @brief Describes the sender's link MTU (MSS + 40 for IPv4, + 60 for IPv6) and what a
+ * reduced value usually means. Server-side MSS is often clamped deliberately (CDNs send
+ * 1400-1420), so a SYN-ACK is not described as a tunnel.
  */
-[[nodiscard]] std::string describe_path_mtu(bool has_mss, uint16_t mss);
+[[nodiscard]] std::string describe_path_mtu(const TcpSynData &syn, bool server_side);
 
 /**
  * @brief Describes network proximity from estimated hop count.

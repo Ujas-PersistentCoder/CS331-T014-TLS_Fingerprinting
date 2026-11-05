@@ -139,7 +139,7 @@ void print_verbose_server(const ServerHelloData &sh, const JA3Fingerprint &ja3s,
               << Color::DIM << "c: [" << ja4s.raw_ja4_c << "]" << Color::RESET << "\n";
 }
 
-void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf) {
+void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf, bool server_side) {
     const std::string ja4t_str = compute_ja4t(syn);
 
     // Option flags inspection
@@ -176,31 +176,41 @@ void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf) {
     std::cout << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-TCP-Window]  " << Color::RESET
               << Color::DIM << "raw: " << Color::RESET << syn.window_size;
-    if (syn.has_window_scale && syn.window_scale > 0 && syn.window_scale <= 14) {
-        uint32_t mult = 1U << syn.window_scale;
-        uint64_t max_buf = static_cast<uint64_t>(syn.window_size) * mult;
+    // The SYN's own window is never scaled (RFC 7323 §2.2); the shift applies to later segments,
+    // so the largest window this stack can ever advertise is 65535 << shift.
+    if (syn.has_window_scale && syn.window_scale > 14) {
+        std::cout << Color::DIM << "  scale: " << Color::RESET << Color::RED
+                  << static_cast<unsigned>(syn.window_scale) << " (invalid: RFC 7323 caps the shift at 14)"
+                  << Color::RESET;
+    } else if (syn.has_window_scale && syn.window_scale > 0) {
+        const uint32_t mult = 1U << syn.window_scale;
+        const uint64_t max_window = static_cast<uint64_t>(65535) * mult;
         std::cout << Color::DIM << "  scale: " << Color::RESET << static_cast<unsigned>(syn.window_scale)
-                  << Color::DIM << " (multiplier ×" << mult << " → max effective buffer: " 
-                  << (max_buf / 1024) << " KB)" << Color::RESET;
-    } else if (syn.has_window_scale && syn.window_scale == 0) {
-        std::cout << Color::DIM << "  scale: 0 (multiplier ×1)" << Color::RESET;
+                  << Color::DIM << " (×" << mult << " → max receive window " << (max_window / 1024)
+                  << " KB)" << Color::RESET;
+    } else if (syn.has_window_scale) {
+        std::cout << Color::DIM << "  scale: 0 (×1, scaling enabled but unused)" << Color::RESET;
     } else {
-        std::cout << Color::DIM << "  (no window scale negotiated: embedded/legacy stack)" << Color::RESET;
+        std::cout << Color::DIM << "  (no window scale option: max window 64 KB)" << Color::RESET;
     }
     std::cout << "\n";
 
     // 3. Path MTU & Encapsulation
     std::cout << Color::GRAY << "   │  " << Color::RESET
               << Color::CYAN << "[V-TCP-MTU]     " << Color::RESET
-              << describe_path_mtu(syn.has_mss, syn.mss) << "\n";
+              << describe_path_mtu(syn, server_side) << "\n";
 
     // 4. Network Distance & Proximity
     std::cout << Color::GRAY << "   │  " << Color::RESET
-              << Color::CYAN << "[V-TCP-Network] " << Color::RESET
-              << Color::DIM << "Observed TTL: " << Color::RESET << static_cast<unsigned>(syn.ip_ttl)
-              << Color::DIM << " | Estimated Initial TTL: " << Color::RESET << static_cast<unsigned>(inf.initial_ttl)
-              << Color::DIM << " → " << Color::RESET << Color::BOLD << static_cast<unsigned>(inf.hops) << " hops " << Color::RESET
-              << Color::DIM << "(" << describe_network_proximity(inf.hops) << ")" << Color::RESET << "\n";
+              << Color::CYAN << "[V-TCP-Network] " << Color::RESET;
+    if (inf.initial_ttl == 0) {
+        std::cout << Color::DIM << "TTL unknown (0): distance undetermined" << Color::RESET << "\n";
+    } else {
+        std::cout << Color::DIM << "Observed TTL: " << Color::RESET << static_cast<unsigned>(syn.ip_ttl)
+                  << Color::DIM << " | Estimated Initial TTL: " << Color::RESET << static_cast<unsigned>(inf.initial_ttl)
+                  << Color::DIM << " → " << Color::RESET << Color::BOLD << static_cast<unsigned>(inf.hops) << " hops " << Color::RESET
+                  << Color::DIM << "(" << describe_network_proximity(inf.hops) << ")" << Color::RESET << "\n";
+    }
 
     // 5. OS Stack Deduction & Integrity
     std::cout << Color::GRAY << "   │  " << Color::RESET
@@ -208,12 +218,22 @@ void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf) {
               << Color::DIM << "layout: " << Color::RESET << os_family_name(inf.layout_family)
               << Color::DIM << " | TTL family: " << Color::RESET << os_family_name(inf.ttl_family)
               << Color::DIM << " → " << Color::RESET;
-    if (inf.stack_anomaly) {
+    // Malformed first: infer_os() also sets stack_anomaly for it, which would hide this branch
+    if (syn.malformed_options) {
+        std::cout << Color::RED << Color::BOLD << "MALFORMED: invalid option framing or window scale > 14 (hand-crafted packet)"
+                  << Color::RESET;
+    } else if (inf.stack_anomaly && server_side) {
+        // Mirrors report_tcp_fingerprint: no STACK_ANOMALY for SYN-ACKs
+        std::cout << Color::DIM << "layout and TTL disagree: normal for CDN / load-balancer SYN-ACKs (not alerted)"
+                  << Color::RESET;
+    } else if (inf.stack_anomaly) {
         std::cout << Color::YELLOW << Color::BOLD << "ANOMALY: Incompatible layout & TTL (possible spoofing/rewrite)" << Color::RESET;
-    } else if (syn.malformed_options) {
-        std::cout << Color::RED << Color::BOLD << "MALFORMED: Option framing invalid (hand-crafted packet)" << Color::RESET;
+    } else if (inf.layout_family == OsFamily::Unknown) {
+        std::cout << os_family_name(inf.family) << Color::DIM << " (TTL only: option layout not recognised)" << Color::RESET;
+    } else if (inf.ttl_family == OsFamily::Unknown) {
+        std::cout << os_family_name(inf.family) << Color::DIM << " (option layout only: TTL unknown)" << Color::RESET;
     } else {
-        std::cout << Color::GREEN << os_family_name(inf.family) << " (Corroborated: Clean stack profile)" << Color::RESET;
+        std::cout << Color::GREEN << os_family_name(inf.family) << " (Corroborated: layout and TTL agree)" << Color::RESET;
     }
     std::cout << "\n";
 }
@@ -264,6 +284,7 @@ struct CaptureEngine::Impl {
                      uint8_t ip_ttl, std::time_t now) {
         TcpSynData syn;
         if (!parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, syn)) return false;
+        syn.ipv6 = key.ip_version == 6;
         if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
             return false; // Flooded with fresh SYNs: fail open, this flow just gets no JA4T
         }
@@ -342,7 +363,7 @@ struct CaptureEngine::Impl {
                   << Color::DIM << "  TTL " << static_cast<unsigned>(syn.ip_ttl)
                   << ", " << static_cast<unsigned>(inf.hops) << " hops" << Color::RESET << "\n";
 
-        if (opts.verbose) print_verbose_tcp(syn, inf);
+        if (opts.verbose) print_verbose_tcp(syn, inf, kind == FingerprintKind::JA4TS);
 
         unsigned alerts = 0;
         // Client SYNs only: CDNs and load balancers routinely run Linux with TTL 128/255
