@@ -10,6 +10,15 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose build type" FORCE)
 endif()
 
+# macOS dynamic linker (dyld) RPATH configuration
+if(APPLE)
+    set(CMAKE_MACOSX_RPATH ON)
+    set(CMAKE_SKIP_BUILD_RPATH FALSE)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+    list(APPEND CMAKE_BUILD_RPATH "/opt/homebrew/lib" "/usr/local/lib")
+endif()
+
 # 1. OS-Agnostic Packet Capture Dependency
 find_path(PCAP_INCLUDE_DIR NAMES pcap.h PATH_SUFFIXES pcap include)
 find_library(PCAP_LIBRARY NAMES pcap wpcap Packet)
@@ -120,5 +129,18 @@ target_link_libraries(unit_tests
         GTest::gtest
         GTest::gtest_main
 )
+
+if(APPLE)
+    set_target_properties(unit_tests PROPERTIES
+        BUILD_RPATH "/opt/homebrew/lib;/usr/local/lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+        MACOSX_RPATH TRUE
+    )
+endif()
+
 include(GoogleTest)
-gtest_discover_tests(unit_tests)
+gtest_discover_tests(unit_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib"
+)
