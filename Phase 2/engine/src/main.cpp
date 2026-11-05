@@ -14,8 +14,6 @@ void signal_handler(int sig) {
     if (engine) {
         engine->stop();
     }
-    // Restore default handler so a second interrupt immediately terminates
-    std::signal(sig, SIG_DFL);
 }
 
 void print_usage(const char *prog) {
@@ -112,7 +110,9 @@ int main(int argc, char *argv[]) {
         std::cout << "\n\033[1;32m=== " << (is_live ? "Live Capture Summary" : "Processing Summary") << " ===\033[0m\n"
                   << "Total Packets:    " << stats.total_packets.load() << "\n"
                   << "ClientHellos:     " << stats.client_hellos.load() << "\n"
-                  << "ServerHellos:     " << stats.server_hellos.load() << "\n";
+                  << "ServerHellos:     " << stats.server_hellos.load() << "\n"
+                  << "Dropped Handshakes: " << stats.dropped_handshakes.load() << "\n"
+                  << "Queue Overflows:    " << stats.queue_overflows.load() << "\n";
         if (options.enable_ja4t) {
             std::cout << "TCP SYN/SYN-ACK:  " << stats.tcp_syns.load() << " / " << stats.tcp_synacks.load() << "\n"
                       << "Cross-layer Alerts: " << stats.cross_layer_alerts.load() << "\n";
@@ -135,6 +135,8 @@ int main(int argc, char *argv[]) {
                   << "Total Packets Scanned : " << stats.total_packets.load() << "\n"
                   << "ClientHellos Found    : " << stats.client_hellos.load() << "\n"
                   << "ServerHellos Found    : " << stats.server_hellos.load() << "\n"
+                  << "Dropped Handshakes    : " << stats.dropped_handshakes.load() << "\n"
+                  << "Queue Overflows       : " << stats.queue_overflows.load() << "\n"
                   << "Execution Time        : " << std::fixed << std::setprecision(3) 
                   << (stats.elapsed_seconds() * 1000.0) << " ms (" 
                   << std::setprecision(4) << stats.elapsed_seconds() << " s)\n"
