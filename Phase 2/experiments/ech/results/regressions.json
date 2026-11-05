@@ -1,0 +1,63 @@
+{
+  "baseline_revision": "dd3860a00c7c9096ba18d1612017ca748e29c6ff",
+  "passed": true,
+  "captures": [
+    {
+      "capture": "cloudflare_run1.pcap",
+      "fingerprint_values": 38,
+      "summaries": 29,
+      "complete_pairs": 8,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    },
+    {
+      "capture": "curl.pcap",
+      "fingerprint_values": 4,
+      "summaries": 1,
+      "complete_pairs": 1,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    },
+    {
+      "capture": "python_requests.pcap",
+      "fingerprint_values": 4,
+      "summaries": 1,
+      "complete_pairs": 1,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    },
+    {
+      "capture": "custom_client.pcap",
+      "fingerprint_values": 4,
+      "summaries": 1,
+      "complete_pairs": 1,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    },
+    {
+      "capture": "chrome.pcap",
+      "fingerprint_values": 16,
+      "summaries": 4,
+      "complete_pairs": 4,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    },
+    {
+      "capture": "chrome_run2.pcap",
+      "fingerprint_values": 12,
+      "summaries": 3,
+      "complete_pairs": 3,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    },
+    {
+      "capture": "test_ja3.pcap",
+      "fingerprint_values": 12,
+      "summaries": 3,
+      "complete_pairs": 3,
+      "fingerprints_equal": true,
+      "summaries_equal_after_capture_id_normalization": true
+    }
+  ],
+  "total_fingerprint_values": 90
+}

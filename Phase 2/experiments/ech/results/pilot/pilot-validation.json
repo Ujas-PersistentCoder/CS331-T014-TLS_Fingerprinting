@@ -1,0 +1,60 @@
+{
+  "anomalies": [],
+  "passed": true,
+  "rows": [
+    {
+      "aead_id": 1,
+      "attempt_id": "pilot-A",
+      "ciphertext_length": 176,
+      "client_port": 55988,
+      "eligible": true,
+      "enc_length": 32,
+      "errors": [],
+      "ja3": "ad08ec98e64a14f4ceaa3f769ad4eadf",
+      "ja4": "t13d0308h2_55b375c5d22e_0365bc7f0f41",
+      "kdf_id": 1,
+      "label": "accepted_real",
+      "mode": "accepted",
+      "outer_random": "d39dd54654bd47ad31ce420646edc7a4cd0c88d34c5c56a1b389939f20a1f946",
+      "profile": "A",
+      "server_port": 55987,
+      "session": "pilot"
+    },
+    {
+      "aead_id": 1,
+      "attempt_id": "pilot-B",
+      "ciphertext_length": 176,
+      "client_port": 55989,
+      "eligible": true,
+      "enc_length": 32,
+      "errors": [],
+      "ja3": "cbe6fcacd92d3176fbbcd4078c28f200",
+      "ja4": "t13d0308h2_55b375c5d22e_0365bc7f0f41",
+      "kdf_id": 1,
+      "label": "accepted_real",
+      "mode": "accepted",
+      "outer_random": "9e8ea7f520429017270945a90ba929640118c71357676a22e27a09623439e9a7",
+      "profile": "B",
+      "server_port": 55987,
+      "session": "pilot"
+    },
+    {
+      "aead_id": 1,
+      "attempt_id": "pilot-grease",
+      "ciphertext_length": 144,
+      "client_port": 55990,
+      "eligible": true,
+      "enc_length": 32,
+      "errors": [],
+      "ja3": "d29f09567122ea37dda4863abe0d88b1",
+      "ja4": "t13d0308h2_55b375c5d22e_0365bc7f0f41",
+      "kdf_id": 1,
+      "label": "grease",
+      "mode": "grease",
+      "outer_random": "e7cedfa6d55cd5b397958193f121a52e712f5a522d2c6aad5da8bd432f6140d7",
+      "profile": "A",
+      "server_port": 55987,
+      "session": "pilot"
+    }
+  ]
+}

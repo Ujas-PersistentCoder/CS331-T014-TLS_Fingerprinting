@@ -111,6 +111,8 @@ std::string sha256_hex_12(std::string_view input) {
 }
 
 JA4Fingerprint compute_ja4(const ClientHelloData &client) {
+    // With ECH these are visible outer-hello features; the SNI flag/ALPN cannot
+    // recover the private inner values. Keep the existing fingerprint definition.
     JA4Fingerprint fp;
 
     // 1. JA4_a (10 Characters: Protocol + Version + SNI-flag + CipherCount + ExtCount + ALPN)
@@ -149,6 +151,8 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
     fp.ja4_a.push_back(alpn_first);
     fp.ja4_a.push_back(alpn_last);
 
+    // Sort copies for JA4's order normalization, leaving parser wire order intact
+    // for JA3. ECH features are reported separately rather than added to the hash.
     // 2. JA4_b (Sorted Ciphers, 12 hex chars)
     if (client.cipher_suites.empty()) {
         fp.ja4_b = "000000000000";
@@ -195,7 +199,10 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
     fp.ja4_a.reserve(7);
     fp.ja4_a.push_back('t');
 
-    const uint16_t ver = (server.selected_version != 0) ? server.selected_version : server.server_version;
+    // Preserve main's GREASE fallback for the fingerprint, while retaining the
+    // actual selected-version bytes in telemetry so they cannot supply I3 evidence.
+    const uint16_t ver = (server.selected_version != 0 && !is_grease(server.selected_version))
+        ? server.selected_version : server.server_version;
     fp.ja4_a.append(ja4_version_code(ver));
 
     // Extension count: every extension the server sent, ALPN and GREASE included

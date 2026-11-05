@@ -14,9 +14,11 @@ constexpr uint8_t TLS_RECORD_CHANGE_CIPHER_SPEC = 0x14;
 constexpr uint8_t TLS_HANDSHAKE_CLIENT_HELLO    = 0x01;
 constexpr uint8_t TLS_HANDSHAKE_SERVER_HELLO    = 0x02;
 
-// Standard wire limits
+// Protocol payload ceiling and our smaller implementation budget are distinct.
+// The 8 KB budget includes the record header; exceeding it is unsupported input,
+// not malformed TLS. ECH/PQ fields can grow hellos; this is no universal size bound.
 constexpr size_t MAX_TLS_RECORD_LENGTH = 16384;      // RFC 8446 max record payload (16 KB)
-constexpr size_t ACCUMULATOR_BUFFER_SIZE = 8192;     // 8 KB buffer: covers Kyber/ML-KEM PQ-TLS (2.5-3.5 KB)
+constexpr size_t ACCUMULATOR_BUFFER_SIZE = 8192;     // Supported total record size
 constexpr uint32_t FLOW_TIMEOUT_SECONDS = 3;         // Incomplete handshake expiration window
 constexpr uint32_t SYN_TIMEOUT_SECONDS = 30;         // SYN -> ClientHello correlation window (JA4T)
 constexpr size_t   SYN_TABLE_MAX_ENTRIES = 65536;    // Bound on tracked SYNs (SYN flood guard)

@@ -1,0 +1,19 @@
+{
+  "boringssl_revision": "df870ed7fa51110edb872beb3357a44d20e1ce56",
+  "engine_revision": "dd3860a00c7c9096ba18d1612017ca748e29c6ff",
+  "engine_sha256": "8aaa7dc2150903e4f079bc8769122eb82705f85a2628e0e0feaeef2387ae1d9c",
+  "lab_sha256": "7df5ec849d68b0a0a4b8e5a36fb149b260e5f78ebc6d5311548fb78c763c13a5",
+  "python": "3.13.6 (v3.13.6:4e665351082, Aug  6 2025, 11:22:35) [Clang 16.0.0 (clang-1600.0.26.6)]",
+  "sources": {
+    "analysis.py": "f7b16dc97136fcf558541a7b0ae0f4d4cfb8ee9495c3a5888c9b08fb0a2ec013",
+    "lab.cpp": "a9ad659eb7e9266f2baed711b1156a35ac0adce6e1a90c1ebe2f5fd5d458a8b0",
+    "run.py": "a4f086f3f53e90188c74579f9a53bede64fcff5dd417a9e4b57e0302d8f14565",
+    "verify.py": "09c590f6b9af694983fe297037f17ca1e6dd22450524355a5b133855b00134c4"
+  },
+  "tools": {
+    "cmake": "cmake version 4.4.3",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+    "tcpdump": "tcpdump version 4.99.1 -- Apple version 161",
+    "tshark": "TShark (Wireshark) 4.6.8 (v4.6.8-0-ge677bf052328)."
+  }
+}

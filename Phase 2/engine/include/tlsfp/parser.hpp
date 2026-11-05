@@ -3,6 +3,8 @@
 
 #include "tlsfp/types.hpp"
 #include "tlsfp/byte_reader.hpp"
+#include "tlsfp/ech_parser.hpp"
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <string_view>
@@ -16,9 +18,14 @@ namespace tlsfp {
 
 /**
  * @brief Extracted and filtered fields from a TLS ClientHello.
- * Reused across handshakes to eliminate per-packet heap allocations.
+ * Reused across handshakes to retain vector capacity and reduce allocations.
+ * String views borrow record bytes; copy them before retaining an observation.
  */
 struct ClientHelloData {
+    ParseStatus parse_status{ParseStatus::NotExamined};
+    const char *parse_detail{"not examined"};
+    std::optional<std::array<uint8_t, 32>> outer_random;
+    EchObservation ech;
     uint16_t client_version{0};
     std::vector<uint16_t> cipher_suites;
     std::vector<uint16_t> extensions;
@@ -32,6 +39,10 @@ struct ClientHelloData {
     std::string_view first_alpn; // First ALPN protocol as sent (GREASE included, per JA4 spec)
 
     void clear() noexcept {
+        parse_status = ParseStatus::NotExamined;
+        parse_detail = "not examined";
+        outer_random.reset();
+        ech.clear();
         client_version = 0;
         cipher_suites.clear();
         extensions.clear();
@@ -49,6 +60,10 @@ struct ClientHelloData {
  * @brief Extracted and filtered fields from a TLS ServerHello.
  */
 struct ServerHelloData {
+    ParseStatus parse_status{ParseStatus::NotExamined};
+    const char *parse_detail{"not examined"};
+    std::optional<std::array<uint8_t, 32>> random;
+    bool is_hrr{false};
     uint16_t server_version{0};
     uint16_t selected_version{0};
     uint16_t selected_cipher{0};
@@ -56,6 +71,10 @@ struct ServerHelloData {
     std::string_view first_alpn;
 
     void clear() noexcept {
+        parse_status = ParseStatus::NotExamined;
+        parse_detail = "not examined";
+        random.reset();
+        is_hrr = false;
         server_version = 0;
         selected_version = 0;
         selected_cipher = 0;
@@ -69,7 +88,11 @@ struct ServerHelloData {
  * @param record Pointer to start of TLS Record (starts with 0x16)
  * @param record_len Full length of record in bytes
  * @param out Output structure to populate
- * @return true if successfully parsed, false if malformed or truncated
+ * @return true for complete shared framing (even if an ECH body is malformed).
+ * On false, inspect parse_status/parse_detail; do not fingerprint partial fields.
+ * Complete hellos within one record, at most 8192 bytes including its header,
+ * are supported. ECH presence and body status are separate from this outcome.
+ * Complete framing is not full TLS semantic validation of every extension.
  */
 bool parse_client_hello(const uint8_t *record, size_t record_len, ClientHelloData &out);
 

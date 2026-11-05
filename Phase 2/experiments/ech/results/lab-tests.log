@@ -1,0 +1,20 @@
+test_accepted_requires_both_endpoints_and_complete_join (test_lab.JoinTests.test_accepted_requires_both_endpoints_and_complete_join) ... ok
+test_added_variation_does_not_imply_discrimination (test_lab.JoinTests.test_added_variation_does_not_imply_discrimination) ... ok
+test_duplicate_schedule_cannot_inflate_counts (test_lab.JoinTests.test_duplicate_schedule_cannot_inflate_counts) ... ok
+test_failures_and_conflicting_endpoint_results_never_become_rejection (test_lab.JoinTests.test_failures_and_conflicting_endpoint_results_never_become_rejection) ... ok
+test_grease_requires_effective_controls_and_no_acceptance (test_lab.JoinTests.test_grease_requires_effective_controls_and_no_acceptance) ... ok
+test_missing_or_duplicate_evidence_abstains (test_lab.JoinTests.test_missing_or_duplicate_evidence_abstains) ... ok
+test_one_connection_cannot_label_two_attempts (test_lab.JoinTests.test_one_connection_cannot_label_two_attempts) ... ok
+test_tuple_reuse_is_separated_by_outer_random (test_lab.JoinTests.test_tuple_reuse_is_separated_by_outer_random) ... ok
+test_unmatched_rows_are_preserved (test_lab.JoinTests.test_unmatched_rows_are_preserved) ... ok
+test_capture_loss_invalidates_otherwise_valid_join (test_lab.RunnerTests.test_capture_loss_invalidates_otherwise_valid_join) ... ok
+test_existing_output_rejected_before_any_work (test_lab.RunnerTests.test_existing_output_rejected_before_any_work) ... ok
+test_readiness_failure_can_be_cleaned_up (test_lab.RunnerTests.test_readiness_failure_can_be_cleaned_up) ... ok
+test_single_suite_config_decoder_enforces_framing (test_lab.RunnerTests.test_single_suite_config_decoder_enforces_framing) ... ok
+test_timeout_kills_and_reaps_client (test_lab.RunnerTests.test_timeout_kills_and_reaps_client) ... ok
+test_tshark_grease_signature_normalization (test_lab.RunnerTests.test_tshark_grease_signature_normalization) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.462s
+
+OK

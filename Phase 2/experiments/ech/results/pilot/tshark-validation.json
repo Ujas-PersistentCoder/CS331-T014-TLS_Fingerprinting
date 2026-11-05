@@ -1,0 +1,57 @@
+{
+  "checks": [
+    {
+      "ech": {
+        "aead_id": 1,
+        "ciphertext_length": 176,
+        "config_id": 42,
+        "detail": "decoded",
+        "enc_length": 32,
+        "kdf_id": 1,
+        "status": "complete",
+        "variant": 0
+      },
+      "frame": 5,
+      "normalized_ja4": "t13d0308h2_55b375c5d22e_0365bc7f0f41",
+      "outer_random": "d39dd54654bd47ad31ce420646edc7a4cd0c88d34c5c56a1b389939f20a1f946",
+      "profile": "A",
+      "tshark_ja4": "t13d0308h2_55b375c5d22e_37f1fe1bfc0b"
+    },
+    {
+      "ech": {
+        "aead_id": 1,
+        "ciphertext_length": 176,
+        "config_id": 42,
+        "detail": "decoded",
+        "enc_length": 32,
+        "kdf_id": 1,
+        "status": "complete",
+        "variant": 0
+      },
+      "frame": 20,
+      "normalized_ja4": "t13d0308h2_55b375c5d22e_0365bc7f0f41",
+      "outer_random": "9e8ea7f520429017270945a90ba929640118c71357676a22e27a09623439e9a7",
+      "profile": "B",
+      "tshark_ja4": "t13d0308h2_55b375c5d22e_3abc2ad106e3"
+    },
+    {
+      "ech": {
+        "aead_id": 1,
+        "ciphertext_length": 144,
+        "config_id": 19,
+        "detail": "decoded",
+        "enc_length": 32,
+        "kdf_id": 1,
+        "status": "complete",
+        "variant": 0
+      },
+      "frame": 35,
+      "normalized_ja4": "t13d0308h2_55b375c5d22e_0365bc7f0f41",
+      "outer_random": "e7cedfa6d55cd5b397958193f121a52e712f5a522d2c6aad5da8bd432f6140d7",
+      "profile": "A",
+      "tshark_ja4": "t13d0308h2_55b375c5d22e_0206466d767e"
+    }
+  ],
+  "errors": [],
+  "passed": true
+}

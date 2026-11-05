@@ -38,6 +38,8 @@ constexpr char HEX_LUT[] = "0123456789abcdef";
 } // anonymous namespace
 
 std::string md5_hex(const std::string &input) {
+    // MD5 is required for JA3 interoperability, not used as a security primitive.
+    // A matching fingerprint describes shared wire features, not unique identity.
     static thread_local ThreadLocalEvpContext tls_ctx;
     if (!tls_ctx.ctx) return "";
 
@@ -60,10 +62,13 @@ std::string md5_hex(const std::string &input) {
 }
 
 JA3Fingerprint compute_ja3(const ClientHelloData &client) {
+    // Serialize the visible hello with GREASE already filtered by the parser.
+    // Preserve list order: browser extension permutation intentionally changes
+    // JA3. ECH metadata adds observations without changing this standard input.
     JA3Fingerprint fp;
     fp.raw_string.reserve(512);
 
-    // 1. SSLVersion
+    // 1. Wire ClientHello version, including TLS 1.3's legacy value 0x0303.
     char ver_buf[16];
     auto [ptr, ec] = std::to_chars(ver_buf, ver_buf + sizeof(ver_buf), client.client_version);
     fp.raw_string.append(ver_buf, static_cast<size_t>(ptr - ver_buf));
@@ -90,6 +95,8 @@ JA3Fingerprint compute_ja3(const ClientHelloData &client) {
 }
 
 JA3Fingerprint compute_ja3s(const ServerHelloData &server) {
+    // JA3S uses the wire ServerHello version and selected cipher, not the client's
+    // offered list. The capture layer excludes HRR before reaching this function.
     JA3Fingerprint fp;
     fp.raw_string.reserve(128);
 

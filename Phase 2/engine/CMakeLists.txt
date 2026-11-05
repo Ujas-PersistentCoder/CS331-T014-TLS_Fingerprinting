@@ -42,6 +42,8 @@ add_library(tlsfp_phase2_lib STATIC
     src/accumulator.cpp
     src/capture.cpp
     src/parser.cpp
+    src/ech_parser.cpp
+    src/ech_analysis.cpp
     src/ja3.cpp
     src/ja4.cpp
     src/ja4t.cpp
@@ -75,9 +77,11 @@ else()
         -Wall -Wextra -Wpedantic
         $<$<CONFIG:Release>:-O3>
         $<$<CONFIG:Debug>:-g3>
+    )
+    target_compile_options(tlsfp_phase2_lib PUBLIC
         $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
-    # PUBLIC: executables linking this static lib need the sanitizer runtimes too
+    # Static libraries do not link; propagate sanitizer runtime flags to consumers.
     target_link_options(tlsfp_phase2_lib PUBLIC
         $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
@@ -118,6 +122,12 @@ FetchContent_Declare(
 )
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# GoogleTest must use the same container annotations and sanitizer runtime as
+# its consumers; prebuilt Homebrew libraries are not compatible with ASan here.
+if(NOT MSVC)
+    add_compile_options($<$<CONFIG:Debug>:-fsanitize=address,undefined>)
+    add_link_options($<$<CONFIG:Debug>:-fsanitize=address,undefined>)
+endif()
 FetchContent_MakeAvailable(googletest)
 
 if(NOT TARGET GTest::gtest)
@@ -129,6 +139,13 @@ endif()
 
 add_executable(unit_tests
     tests/test_fingerprints.cpp
+    tests/test_ech_parser.cpp
+    tests/test_ech_analysis.cpp
+    tests/test_ech_connections.cpp
+)
+
+target_compile_definitions(unit_tests PRIVATE
+    TLSFP_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
 target_link_libraries(unit_tests
     PRIVATE

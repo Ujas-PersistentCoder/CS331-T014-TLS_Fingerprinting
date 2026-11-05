@@ -283,6 +283,8 @@ private:
 #endif
 
 bool write_all(int fd, const char *data, std::size_t length) {
+    // TCP is a byte stream: one send/recv need not transfer an entire RESP value.
+    // Complete short writes here; the corresponding readers enforce RESP framing.
     std::size_t total = 0;
     while (total < length) {
         ssize_t written = ::send(fd, data + total, length - total, MSG_NOSIGNAL);
@@ -462,6 +464,8 @@ bool FingerprintDatabase::ping() {
 
 bool FingerprintDatabase::store(const FingerprintRecord &record) {
     if (record.hash.empty()) return false;
+    // Keep a local catalog so labeling can work without Redis. Redis persistence
+    // is attempted separately; a local entry alone does not imply a durable write.
     const std::string key = redis_key(record.kind, record.hash);
     cache_[key] = record;
     missing_cache_.erase(key);
@@ -506,6 +510,8 @@ void FingerprintDatabase::remember_missing(const std::string &key) {
 
 bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
                                 FingerprintRecord &record) {
+    // Cache hits and misses to avoid repeated synchronous Redis round trips on
+    // recurring fingerprints. Enrollment clears a prior miss in store().
     const std::string key = redis_key(kind, hash);
     auto cached = cache_.find(key);
     if (cached != cache_.end()) {
