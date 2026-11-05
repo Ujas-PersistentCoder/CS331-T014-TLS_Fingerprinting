@@ -29,6 +29,66 @@ PqtlsOffer make_pqtls_offer(const PqtlsClientObservation &client) {
     return offer;
 }
 
+namespace {
+
+// Reverse 4-tuple (server -> client to client -> server)
+FlowKey reverse_key(const FlowKey &key) {
+    FlowKey r = key;
+    r.src_ip = key.dst_ip;
+    r.dst_ip = key.src_ip;
+    r.src_port = key.dst_port;
+    r.dst_port = key.src_port;
+    return r;
+}
+
+} // anonymous namespace
+
+PqtlsOfferTable::PqtlsOfferTable(size_t max_entries)
+    : max_entries_(max_entries < 2 ? 2 : max_entries) {}
+
+bool PqtlsOfferTable::after_hrr(const FlowKey &client_key) const {
+    auto it = offers_.find(client_key);
+    if (it == offers_.end()) return false;
+    return it->second.offer.hrr_seen;
+}
+
+void PqtlsOfferTable::store(const FlowKey &client_key, const PqtlsOffer &offer) {
+    // New flow and table full: make room first
+    if (offers_.find(client_key) == offers_.end() && offers_.size() >= max_entries_) {
+        drop_older_half();
+    }
+    // Post-HRR ClientHello overwrites the old offer
+    Entry &entry = offers_[client_key];
+    entry.offer = offer;
+    entry.order = next_order_++;
+}
+
+PqtlsOffer PqtlsOfferTable::take(const FlowKey &server_key, bool is_hrr) {
+    PqtlsOffer offer;  // seen = false if no ClientHello
+    auto it = offers_.find(reverse_key(server_key));
+    if (it == offers_.end()) return offer;
+
+    offer = it->second.offer;
+    if (is_hrr) {
+        it->second.offer.hrr_seen = true;  // keep for the retry
+    } else {
+        offers_.erase(it);
+    }
+    return offer;
+}
+
+// Flows whose ServerHello never came (lost, filtered, port scan) are the oldest ones
+void PqtlsOfferTable::drop_older_half() {
+    uint64_t cutoff = next_order_ - max_entries_ / 2;
+    for (auto it = offers_.begin(); it != offers_.end(); ) {
+        if (it->second.order < cutoff) {
+            it = offers_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 // Classical groups (RFC 8446 Sec. 4.2.7, RFC 7919, RFC 8734)
 bool is_known_classical_group(uint16_t group) {
     if (group == 0x0017) return true;                    // secp256r1

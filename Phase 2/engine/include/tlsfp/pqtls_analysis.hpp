@@ -5,8 +5,11 @@
 // Labels fall back to UNKNOWN when the wire evidence is insufficient.
 
 #include "tlsfp/pqtls_parser.hpp"
+#include "tlsfp/types.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 namespace tlsfp {
 
@@ -22,6 +25,41 @@ struct PqtlsOffer {
 
 // Snapshot of the client observation for flow correlation
 PqtlsOffer make_pqtls_offer(const PqtlsClientObservation &client);
+
+// Max offers waiting for a ServerHello, per worker (same bound as the SYN table)
+constexpr size_t PQTLS_OFFER_TABLE_MAX = 65536;
+
+/**
+ * @brief Client offers waiting for their ServerHello. One table per worker thread:
+ * both directions of a flow hash to the same worker, so no lock is needed.
+ * Bounded: when full, the older half of the entries is dropped.
+ */
+class PqtlsOfferTable {
+public:
+    explicit PqtlsOfferTable(size_t max_entries = PQTLS_OFFER_TABLE_MAX);
+
+    // ClientHello side, key is client -> server
+    bool after_hrr(const FlowKey &client_key) const;
+    void store(const FlowKey &client_key, const PqtlsOffer &offer);
+
+    // ServerHello side, key is server -> client. Returns seen = false if no offer.
+    // Final ServerHello removes the offer, HRR keeps it and marks hrr_seen.
+    PqtlsOffer take(const FlowKey &server_key, bool is_hrr);
+
+    size_t size() const { return offers_.size(); }
+
+private:
+    struct Entry {
+        PqtlsOffer offer;
+        uint64_t   order{0};  // Insert counter, smaller = older
+    };
+
+    void drop_older_half();
+
+    std::unordered_map<FlowKey, Entry, FlowHash> offers_;
+    size_t   max_entries_;
+    uint64_t next_order_{0};
+};
 
 // Key exchange outcome per flow (PQ-TLS doc Sec. 5.2)
 enum class PqtlsPosture : uint8_t {

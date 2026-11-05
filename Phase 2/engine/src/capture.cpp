@@ -2,18 +2,32 @@
 #include "tlsfp/parser.hpp"
 #include "tlsfp/ja3.hpp"
 #include "tlsfp/ja4.hpp"
+#include "tlsfp/ja4t.hpp"
 #include "tlsfp/db.hpp"
 #include "tlsfp/pqtls_analysis.hpp"
 
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <optional>
+#include <unordered_map>
+#include <ctime>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <filesystem>
-#include <unordered_map>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <mutex>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 
 namespace tlsfp {
 
@@ -172,25 +186,369 @@ void print_pqtls_server(const ServerHelloData &sh, PqtlsPosture posture) {
               << pqtls_server_check_text(sh.pqtls) << Color::RESET << "\n";
 }
 
-// Reverse 4-tuple (server -> client to client -> server)
-FlowKey reverse_key(const FlowKey &key) {
-    FlowKey r = key;
-    r.src_ip = key.dst_ip;
-    r.dst_ip = key.src_ip;
-    r.src_port = key.dst_port;
-    r.dst_port = key.src_port;
-    return r;
+void print_verbose_tcp(const TcpSynData &syn, const OsInference &inf, bool server_side) {
+    const std::string ja4t_str = compute_ja4t(syn);
+
+    // Option flags inspection
+    bool has_sack = false;
+    bool has_ts = false;
+    size_t eol_count = 0;
+    for (size_t i = 0; i < syn.option_count; ++i) {
+        if (syn.option_kinds[i] == TCP_OPT_SACK_PERM) has_sack = true;
+        else if (syn.option_kinds[i] == TCP_OPT_TIMESTAMP) has_ts = true;
+        else if (syn.option_kinds[i] == TCP_OPT_EOL) ++eol_count;
+    }
+
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-JA4T-Raw]    " << Color::RESET
+              << Color::BOLD << ja4t_str << Color::RESET << "\n";
+
+    // 1. TCP Options List with friendly names
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Opts]    " << Color::RESET << "[";
+    for (size_t i = 0; i < syn.option_count; ++i) {
+        if (i > 0) std::cout << Color::GRAY << ", " << Color::RESET;
+        const char *name = tcp_option_name(syn.option_kinds[i]);
+        std::cout << Color::YELLOW;
+        if (name) std::cout << name;
+        else std::cout << static_cast<unsigned>(syn.option_kinds[i]);
+        std::cout << Color::RESET;
+    }
+    std::cout << "]  " << Color::DIM << "(SACK: " << (has_sack ? "supported" : "off")
+              << ", Timestamps: " << (has_ts ? "enabled" : "disabled")
+              << (eol_count > 0 ? (", EOL padding: " + std::to_string(eol_count) + "B") : "")
+              << ")" << Color::RESET << "\n";
+
+    // 2. Window & Buffering Profile
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Window]  " << Color::RESET
+              << Color::DIM << "raw: " << Color::RESET << syn.window_size;
+    // The SYN's own window is never scaled (RFC 7323 §2.2); the shift applies to later segments,
+    // so the largest window this stack can ever advertise is 65535 << shift.
+    if (syn.has_window_scale && syn.window_scale > 14) {
+        std::cout << Color::DIM << "  scale: " << Color::RESET << Color::RED
+                  << static_cast<unsigned>(syn.window_scale) << " (invalid: RFC 7323 caps the shift at 14)"
+                  << Color::RESET;
+    } else if (syn.has_window_scale && syn.window_scale > 0) {
+        const uint32_t mult = 1U << syn.window_scale;
+        const uint64_t max_window = static_cast<uint64_t>(65535) * mult;
+        std::cout << Color::DIM << "  scale: " << Color::RESET << static_cast<unsigned>(syn.window_scale)
+                  << Color::DIM << " (×" << mult << " → max receive window " << (max_window / 1024)
+                  << " KB)" << Color::RESET;
+    } else if (syn.has_window_scale) {
+        std::cout << Color::DIM << "  scale: 0 (×1, scaling enabled but unused)" << Color::RESET;
+    } else {
+        std::cout << Color::DIM << "  (no window scale option: max window 64 KB)" << Color::RESET;
+    }
+    std::cout << "\n";
+
+    // 3. Path MTU & Encapsulation
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-MTU]     " << Color::RESET
+              << describe_path_mtu(syn, server_side) << "\n";
+
+    // 4. Network Distance & Proximity
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Network] " << Color::RESET;
+    if (inf.initial_ttl == 0) {
+        std::cout << Color::DIM << "TTL unknown (0): distance undetermined" << Color::RESET << "\n";
+    } else {
+        std::cout << Color::DIM << "Observed TTL: " << Color::RESET << static_cast<unsigned>(syn.ip_ttl)
+                  << Color::DIM << " | Estimated Initial TTL: " << Color::RESET << static_cast<unsigned>(inf.initial_ttl)
+                  << Color::DIM << " → " << Color::RESET << Color::BOLD << static_cast<unsigned>(inf.hops) << " hops " << Color::RESET
+                  << Color::DIM << "(" << describe_network_proximity(inf.hops) << ")" << Color::RESET << "\n";
+    }
+
+    // 5. OS Stack Deduction & Integrity
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << Color::CYAN << "[V-TCP-Stack]   " << Color::RESET
+              << Color::DIM << "layout: " << Color::RESET << os_family_name(inf.layout_family)
+              << Color::DIM << " | TTL family: " << Color::RESET << os_family_name(inf.ttl_family)
+              << Color::DIM << " → " << Color::RESET;
+    // Malformed first: infer_os() also sets stack_anomaly for it, which would hide this branch
+    if (syn.malformed_options) {
+        std::cout << Color::RED << Color::BOLD << "MALFORMED: invalid option framing or window scale > 14 (hand-crafted packet)"
+                  << Color::RESET;
+    } else if (inf.stack_anomaly && server_side) {
+        // Mirrors report_tcp_fingerprint: no STACK_ANOMALY for SYN-ACKs
+        std::cout << Color::DIM << "layout and TTL disagree: normal for CDN / load-balancer SYN-ACKs (not alerted)"
+                  << Color::RESET;
+    } else if (inf.stack_anomaly) {
+        std::cout << Color::YELLOW << Color::BOLD << "ANOMALY: Incompatible layout & TTL (possible spoofing/rewrite)" << Color::RESET;
+    } else if (inf.layout_family == OsFamily::Unknown) {
+        std::cout << os_family_name(inf.family) << Color::DIM << " (TTL only: option layout not recognised)" << Color::RESET;
+    } else if (inf.ttl_family == OsFamily::Unknown) {
+        std::cout << os_family_name(inf.family) << Color::DIM << " (option layout only: TTL unknown)" << Color::RESET;
+    } else {
+        std::cout << Color::GREEN << os_family_name(inf.family) << " (Corroborated: layout and TTL agree)" << Color::RESET;
+    }
+    std::cout << "\n";
 }
+
+void print_alert(const std::string &color, const char *tag, const std::string &message) {
+    std::cout << Color::GRAY << "   │  " << Color::RESET
+              << color << Color::BOLD << tag << Color::RESET << "  "
+              << color << message << Color::RESET << "\n";
+}
+
+// A SYN or SYN-ACK held until the TLS Hello on the same directional 4-tuple arrives
+struct SynObservation {
+    TcpSynData syn;
+    std::time_t seen{0};
+};
 
 } // anonymous namespace
 
-struct CaptureEngine::Impl {
+template <typename T, size_t Capacity>
+class SPSCQueue {
+public:
+    template <typename F>
+    bool emplace(F &&init) noexcept {
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t next = (head + 1) % Capacity;
+        if (next == tail_.load(std::memory_order_acquire)) return false;
+        init(slots_[head]);
+        head_.store(next, std::memory_order_release);
+        return true;
+    }
+
+    template <typename F>
+    bool pop_into(F &&consumer) noexcept {
+        const size_t tail = tail_.load(std::memory_order_relaxed);
+        if (tail == head_.load(std::memory_order_acquire)) return false;
+        consumer(slots_[tail]);
+        tail_.store((tail + 1) % Capacity, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return tail_.load(std::memory_order_acquire) ==
+               head_.load(std::memory_order_acquire);
+    }
+
+private:
+    std::array<T, Capacity> slots_{};
+    alignas(64) std::atomic<size_t> head_{0};
+    alignas(64) std::atomic<size_t> tail_{0};
+};
+
+struct HandshakeJob {
+    FlowKey key;
+    uint16_t record_len{0};
+    uint8_t ip_ttl{0};
+    bool has_syn{false};
+    TcpSynData syn_data{};
+    uint8_t record_data[ACCUMULATOR_BUFFER_SIZE]{};
+};
+
+inline uint32_t compute_symmetric_flow_hash(const FlowKey &key) noexcept {
+    uint32_t hash = static_cast<uint32_t>(key.src_port ^ key.dst_port);
+    if (key.ip_version == 4) {
+        hash ^= key.src_ip.v4.s_addr ^ key.dst_ip.v4.s_addr;
+    } else {
+        uint32_t src[4]{};
+        uint32_t dst[4]{};
+        std::memcpy(src, &key.src_ip.v6, sizeof(src));
+        std::memcpy(dst, &key.dst_ip.v6, sizeof(dst));
+        for (size_t i = 0; i < 4; ++i) hash ^= src[i] ^ dst[i];
+    }
+    return hash;
+}
+
+struct WorkerContext {
+    SPSCQueue<HandshakeJob, 2048> queue;
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
+    PqtlsOfferTable pqtls_offers;  // PQ-TLS: per worker, no lock needed
+    std::thread thread;
+};
+
+struct CaptureEngine::Impl {
+    std::vector<std::unique_ptr<WorkerContext>> workers;
+    std::atomic<bool> running{false};
+    std::mutex stdout_mutex;
+    std::mutex enroll_mutex;
     std::unique_ptr<FingerprintDatabase> db;
 
-    // PQ-TLS client offers keyed by client -> server 4-tuple, cleared on final ServerHello
-    std::unordered_map<FlowKey, PqtlsOffer, FlowHash> pqtls_offers;
+    // JA4T state: ONLY accessed by the producer thread in handle_packet / dispatch_handshake
+    // SYNs keyed client->server and SYN-ACKs keyed server->client
+    std::unordered_map<FlowKey, SynObservation, FlowHash> syn_table;
+    std::time_t last_syn_cleanup{0};
+    bool has_syn_cleanup_time{false};
+    uint8_t current_ttl{0};
+    std::time_t current_packet_time{0};
+
+    // Age in either direction: merged or concatenated pcaps can step the clock backwards,
+    // and entries stamped in the "future" must still expire.
+    static bool syn_expired(std::time_t seen, std::time_t now) noexcept {
+        const std::time_t age = now >= seen ? now - seen : seen - now;
+        return age >= static_cast<std::time_t>(SYN_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * @brief Records a SYN / SYN-ACK. The first one wins: BSD-derived stacks (macOS, iOS)
+     * strip window scale, timestamps and SACK from the third SYN retransmission onward,
+     * and JA4T is defined on the initial SYN.
+     * @return true if the packet was a valid SYN that is (or already was) tracked
+     */
+    bool observe_syn(const FlowKey &key, const uint8_t *tcp_hdr, size_t tcp_hdr_len,
+                     uint8_t ip_ttl, std::time_t now) {
+        TcpSynData syn;
+        if (!parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, syn)) return false;
+        syn.ipv6 = key.ip_version == 6;
+        if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
+        if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_table.find(key) == syn_table.end()) {
+            return false; // Flooded with fresh SYNs: fail open, this flow just gets no JA4T
+        }
+        }
+        auto [it, inserted] = syn_table.try_emplace(key);
+        if (inserted || syn_expired(it->second.seen, now)) { // Port reuse after timeout: new connection
+            it->second.syn = syn;
+            it->second.seen = now;
+        }
+        return true;
+    }
+
+    std::optional<SynObservation> take_syn(const FlowKey &key, std::time_t now) {
+        auto it = syn_table.find(key);
+        if (it == syn_table.end()) return std::nullopt;
+        std::optional<SynObservation> obs;
+        if (!syn_expired(it->second.seen, now)) obs = it->second;
+        syn_table.erase(it);
+        return obs;
+    }
+
+    void evict_stale_syns(std::time_t now) {
+        for (auto it = syn_table.begin(); it != syn_table.end(); ) {
+            if (syn_expired(it->second.seen, now)) {
+                it = syn_table.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Full sweep at most once per capture-second; a backwards jump larger than the timeout
+    // (concatenated pcaps) also triggers one, otherwise the table would never drain.
+    void cleanup_stale_syns_if_due(std::time_t now) {
+        if (has_syn_cleanup_time && now - last_syn_cleanup < 1 &&
+            last_syn_cleanup - now < static_cast<std::time_t>(SYN_TIMEOUT_SECONDS)) {
+            return;
+        }
+        evict_stale_syns(now);
+        last_syn_cleanup = now;
+        has_syn_cleanup_time = true;
+    }
+
+    bool lookup(FingerprintKind kind, const std::string &hash, FingerprintRecord &record) {
+        return db && db->lookup(kind, hash, record);
+    }
+
+    unsigned report_tcp_fingerprint(FingerprintKind kind, const char *tag,
+                                    const std::optional<TcpSynData> &obs_syn,
+                                    uint8_t current_ttl,
+                                    const char *hello_name, const CaptureOptions &opts) {
+        std::cout << Color::GRAY << "   │  " << Color::RESET << Color::CYAN << tag << Color::RESET;
+        if (!obs_syn) {
+            std::cout << Color::GRAY << "<" << (kind == FingerprintKind::JA4T ? "SYN" : "SYN-ACK")
+                      << " not captured or correlation expired>" << Color::RESET << "\n";
+            return 0;
+        }
+
+        const TcpSynData &syn = *obs_syn;
+        const OsInference inf = infer_os(syn);
+        const std::string fp = compute_ja4t(syn);
+        std::string label = resolve_label(kind, fp, opts.prompt_unknown);
+        const bool catalogued = label != "<unknown>";
+        if (!catalogued && syn.malformed_options) {
+            label = "inferred: malformed options";
+        } else if (!catalogued && inf.stack_anomaly) {
+            label = std::string("inferred: ") + os_family_name(inf.layout_family) + " options, TTL " +
+                    std::to_string(inf.initial_ttl);
+        } else if (!catalogued) {
+            label = std::string("inferred: ") + os_family_name(inf.family);
+        }
+
+        std::cout << Color::BOLD << fp << Color::RESET << "  "
+                  << (catalogued ? Color::GREEN : Color::BLUE) << "[" << label << "]" << Color::RESET
+                  << Color::DIM << "  TTL " << static_cast<unsigned>(syn.ip_ttl)
+                  << ", " << static_cast<unsigned>(inf.hops) << " hops" << Color::RESET << "\n";
+
+        if (opts.verbose) print_verbose_tcp(syn, inf, kind == FingerprintKind::JA4TS);
+
+        unsigned alerts = 0;
+        // Client SYNs only: CDNs and load balancers routinely run Linux with TTL 128/255
+        if (inf.stack_anomaly && kind == FingerprintKind::JA4T) {
+            print_alert(Color::YELLOW, "⚠ STACK_ANOMALY",
+                        syn.malformed_options
+                            ? std::string("malformed TCP options, which no stock kernel emits (hand-crafted SYN)")
+                            : std::string("TCP options look like ") + os_family_name(inf.layout_family) +
+                                  " but initial TTL " + std::to_string(inf.initial_ttl) + " says " +
+                                  os_family_name(inf.ttl_family) + " (hand-crafted SYN or TTL rewrite)");
+            ++alerts;
+        }
+        const unsigned ttl_delta = current_ttl > syn.ip_ttl ? current_ttl - syn.ip_ttl
+                                                            : syn.ip_ttl - current_ttl;
+        if (ttl_delta > TTL_MISMATCH_TOLERANCE) {
+            print_alert(Color::YELLOW, "⚠ TTL_MISMATCH",
+                        std::string(kind == FingerprintKind::JA4T ? "SYN" : "SYN-ACK") + " arrived with TTL " +
+                        std::to_string(syn.ip_ttl) + " but " + hello_name + " with TTL " +
+                        std::to_string(current_ttl) + " (packets from different hosts or paths: possible injection)");
+            ++alerts;
+        }
+        return alerts;
+    }
+
+    /**
+     * @brief L7 vs L4 check: does the client's kernel match the OS its TLS stack implies?
+     * Only fires for catalog records carrying expected_os (OS-bound TLS stacks such as
+     * SChannel or Apple's Network.framework); cross-platform stacks like Chrome make no claim.
+     * @return Number of alerts raised
+     */
+    unsigned report_impersonation(const std::optional<TcpSynData> &syn,
+                                  const std::string &ja3_hash, const std::string &ja4_fp,
+                                  const CaptureOptions &opts) {
+        if (!syn) return 0;
+
+        FingerprintRecord tls_record;
+        OsFamily claimed = OsFamily::Unknown;
+        if ((lookup(FingerprintKind::JA4, ja4_fp, tls_record) && !tls_record.expected_os.empty()) ||
+            (lookup(FingerprintKind::JA3, ja3_hash, tls_record) && !tls_record.expected_os.empty())) {
+            claimed = os_family_from_label(tls_record.expected_os);
+        }
+
+        const OsInference inf = infer_os(*syn);
+        const std::string ja4t_fp = compute_ja4t(*syn);
+
+        // A catalogued JA4T with an OS label beats the heuristic
+        OsFamily actual = inf.family;
+        FingerprintRecord tcp_record;
+        if (lookup(FingerprintKind::JA4T, ja4t_fp, tcp_record)) {
+            const OsFamily labelled = os_family_from_label(tcp_record.os);
+            if (labelled != OsFamily::Unknown) actual = labelled;
+        }
+
+        if (claimed == OsFamily::Unknown || actual == OsFamily::Unknown) {
+            if (opts.verbose) {
+                std::cout << Color::GRAY << "   │  " << Color::RESET << Color::DIM << "cross-layer: "
+                          << (claimed == OsFamily::Unknown
+                                  ? "no OS claim (TLS fingerprint has no expected_os in catalog)"
+                                  : "TCP/IP stack OS undetermined")
+                          << Color::RESET << "\n";
+            }
+            return 0;
+        }
+
+        const std::string who = tls_record.name.empty() ? std::string("this TLS client") : tls_record.name;
+        if (!os_families_compatible(claimed, actual)) {
+            print_alert(Color::RED, "✖ IMPERSONATION_MISMATCH",
+                        "TLS says " + who + " (ships only on " + os_family_name(claimed) +
+                        ") but the TCP/IP stack is " + os_family_name(actual));
+            return 1;
+        }
+        print_alert(Color::GREEN, "✓ CROSS-LAYER OK", who + " on " + os_family_name(actual));
+        return 0;
+    }
 
     std::string resolve_label(FingerprintKind kind, const std::string &hash, bool prompt_unknown) {
         if (!db) return "<unknown>";
@@ -203,6 +561,12 @@ struct CaptureEngine::Impl {
         }
 
         if (prompt_unknown) {
+            std::lock_guard<std::mutex> enroll_lock(enroll_mutex);
+            if (db->lookup(kind, hash, record)) {
+                if (record.name.empty()) return "<unnamed>";
+                if (record.category.empty()) return record.name;
+                return record.name + " (" + record.category + ")";
+            }
             std::cout << Color::YELLOW << Color::BOLD << "[?]" << Color::RESET << " Unknown "
                       << Color::CYAN << FingerprintDatabase::kind_name(kind) << Color::RESET
                       << " fingerprint " << Color::BOLD << hash << Color::RESET
@@ -219,19 +583,71 @@ struct CaptureEngine::Impl {
 };
 
 CaptureEngine::CaptureEngine(CaptureOptions options)
-    : options_(std::move(options)),
-      impl_(std::make_unique<Impl>()) {
+    : options_(std::move(options)), impl_(std::make_unique<Impl>()) {
     accumulator_ = std::make_unique<TwoTierAccumulator>(
         [this](const FlowKey &key, const uint8_t *record, size_t len) {
-            this->process_assembled_handshake(key, record, len);
-        }
-    );
+            dispatch_handshake(key, record, len);
+        });
 }
 
 CaptureEngine::~CaptureEngine() {
+    stop();
+    if (impl_) {
+        for (auto &worker : impl_->workers) {
+            if (worker->thread.joinable()) worker->thread.join();
+        }
+    }
     if (pcap_handle_) {
         pcap_close(pcap_handle_);
         pcap_handle_ = nullptr;
+    }
+}
+
+void CaptureEngine::dispatch_handshake(const FlowKey &key, const uint8_t *record, size_t len) {
+    if (!impl_ || impl_->workers.empty()) return;
+
+    std::optional<SynObservation> syn_obs;
+    if (options_.enable_ja4t) {
+        syn_obs = impl_->take_syn(key, impl_->current_packet_time);
+    }
+
+    const uint8_t current_ttl = impl_->current_ttl;
+
+    const uint32_t worker_idx = compute_symmetric_flow_hash(key) % impl_->workers.size();
+    auto &worker = *impl_->workers[worker_idx];
+
+    auto init_job = [&](HandshakeJob &job) {
+        job.key = key;
+        job.record_len = static_cast<uint16_t>(len);
+        job.ip_ttl = current_ttl;
+        if (syn_obs) {
+            job.has_syn = true;
+            job.syn_data = syn_obs->syn;
+        } else {
+            job.has_syn = false;
+        }
+        std::memcpy(job.record_data, record, len);
+    };
+
+    bool pushed = worker.queue.emplace(init_job);
+
+    if (!pushed) {
+        if (!options_.read_filename.empty()) {
+            while (!stop_requested_.load(std::memory_order_relaxed)) {
+                #if defined(__x86_64__) || defined(_M_X64)
+                _mm_pause();
+                #else
+                std::this_thread::yield();
+                #endif
+                if (worker.queue.emplace(init_job)) {
+                    pushed = true;
+                    break;
+                }
+            }
+        }
+        if (!pushed) {
+            stats_.dropped_packets.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 
@@ -258,6 +674,11 @@ bool CaptureEngine::setup_pcap() {
 
     datalink_type_ = pcap_datalink(pcap_handle_);
 
+    if (options_.enable_ja4t) {
+        // Allocate buckets once: a rehash of a near-full table mid SYN flood is a latency spike
+        impl_->syn_table.reserve(SYN_TABLE_MAX_ENTRIES);
+    }
+
     // Compile and set BPF filter
     if (!options_.bpf_filter.empty()) {
         struct bpf_program bpf;
@@ -270,19 +691,22 @@ bool CaptureEngine::setup_pcap() {
         }
     }
 
-    // Connect database and seed catalog
+    const size_t worker_count = options_.num_threads != 0
+        ? options_.num_threads
+        : std::max<size_t>(1, std::thread::hardware_concurrency());
+    impl_->workers.reserve(worker_count);
+    const std::string seed_path = resolve_data_file(
+        options_.seed_filename, {"code/db/seed_fingerprints.json", "../db/seed_fingerprints.json", "../../code/db/seed_fingerprints.json"});
+    const std::string manifest_path = resolve_data_file(
+        options_.manifest_filename, {"code/db/capture_manifest.json", "../db/capture_manifest.json", "../../code/db/capture_manifest.json"});
+    const std::string legacy_path = resolve_data_file(
+        options_.legacy_filename, {"code/python/fingerprints.json", "../python/fingerprints.json", "../../code/python/fingerprints.json"});
+
     if (!options_.quiet) {
         RedisConfig rconf;
         rconf.host = options_.redis_host;
         rconf.port = options_.redis_port;
         impl_->db = std::make_unique<FingerprintDatabase>(rconf);
-
-        const std::string seed_path = resolve_data_file(
-            options_.seed_filename, {"code/db/seed_fingerprints.json", "../db/seed_fingerprints.json", "../../code/db/seed_fingerprints.json"});
-        const std::string manifest_path = resolve_data_file(
-            options_.manifest_filename, {"code/db/capture_manifest.json", "../db/capture_manifest.json", "../../code/db/capture_manifest.json"});
-        const std::string legacy_path = resolve_data_file(
-            options_.legacy_filename, {"code/python/fingerprints.json", "../python/fingerprints.json", "../../code/python/fingerprints.json"});
 
         if (impl_->db->connect()) {
             std::cout << Color::GREEN << "[+] Connected to Redis on " 
@@ -293,7 +717,42 @@ bool CaptureEngine::setup_pcap() {
         }
         std::size_t loaded = impl_->db->load_seed_files(seed_path, manifest_path) +
                              impl_->db->load_legacy_ja3_file(legacy_path);
+        if (!options_.extra_catalog_filename.empty()) {
+            std::size_t lab = impl_->db->load_seed_files(options_.extra_catalog_filename);
+            if (lab == 0) {
+                std::cout << Color::YELLOW << "[!] No records loaded from lab catalog "
+                          << options_.extra_catalog_filename << Color::RESET << "\n";
+            } else {
+                std::cout << Color::DIM << "[*] Loaded " << lab << " lab catalog records from "
+                          << options_.extra_catalog_filename << Color::RESET << "\n";
+            }
+        }
         std::cout << Color::DIM << "[*] Loaded " << loaded << " fingerprint catalog records." << Color::RESET << "\n";
+    }
+
+    impl_->running.store(true, std::memory_order_release);
+    for (size_t i = 0; i < worker_count; ++i) {
+        auto ctx = std::make_unique<WorkerContext>();
+        impl_->workers.push_back(std::move(ctx));
+    }
+    for (auto &ctx : impl_->workers) {
+        WorkerContext *ctx_ptr = ctx.get();
+        ctx->thread = std::thread([this, ctx_ptr] {
+            while (impl_->running.load(std::memory_order_acquire) || !ctx_ptr->queue.empty()) {
+                bool processed = ctx_ptr->queue.pop_into([this, ctx_ptr](const HandshakeJob &job) {
+                    process_assembled_handshake(*ctx_ptr, job);
+                });
+                if (!processed) {
+                    for (int spin = 0; spin < 32; ++spin) {
+                        #if defined(__x86_64__) || defined(_M_X64)
+                        _mm_pause();
+                        #endif
+                    }
+                    if (!ctx_ptr->queue.empty()) continue;
+                    std::this_thread::yield();
+                }
+            }
+        });
     }
 
     return true;
@@ -304,13 +763,22 @@ static void global_pcap_callback(u_char *user, const struct pcap_pkthdr *h, cons
     engine->handle_packet(h, bytes);
 }
 
+void CaptureEngine::stop() noexcept {
+    stop_requested_.store(true, std::memory_order_release);
+    if (impl_) impl_->running.store(false, std::memory_order_release);
+    if (pcap_handle_) pcap_breakloop(pcap_handle_);
+}
+
 bool CaptureEngine::run() {
     if (!setup_pcap()) return false;
-
     stats_.start_time = std::chrono::steady_clock::now();
 
     int ret = pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
 
+    impl_->running.store(false, std::memory_order_release);
+    for (auto &worker : impl_->workers) {
+        if (worker->thread.joinable()) worker->thread.join();
+    }
     stats_.end_time = std::chrono::steady_clock::now();
 
     if (ret < 0 && ret != -2) { // -2 is expected break from pcap_breakloop
@@ -321,7 +789,10 @@ bool CaptureEngine::run() {
 }
 
 void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_t *packet) {
-    stats_.total_packets++;
+    stats_.total_packets.fetch_add(1, std::memory_order_relaxed);
+    if (options_.enable_ja4t) {
+        impl_->cleanup_stale_syns_if_due(pkthdr->ts.tv_sec);
+    }
 
     size_t link_hdr_len = 0;
     uint16_t ethertype = 0;
@@ -378,6 +849,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     FlowKey key{};
     size_t ip_hdr_len = 0;
     size_t ip_total_len = 0;
+    uint8_t ip_ttl = 0; // IPv4 TTL / IPv6 Hop Limit
 
     if (ethertype == 0x0800) { // IPv4
         if (pkthdr->caplen < link_hdr_len + 20) return;
@@ -389,8 +861,14 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         if (ip_ptr[9] != IPPROTO_TCP) return;
 
         ip_total_len = (static_cast<size_t>(ip_ptr[2]) << 8) | ip_ptr[3];
-        if (ip_total_len < ip_hdr_len) return;
+        if (ip_total_len == 0) {
+            // TCP Segmentation Offload (TSO/GSO): kernel leaves 0 for outbound superpackets
+            ip_total_len = pkthdr->caplen - link_hdr_len;
+        } else if (ip_total_len < ip_hdr_len) {
+            return;
+        }
 
+        ip_ttl = ip_ptr[8];
         key.ip_version = 4;
         std::memcpy(&key.src_ip.v4.s_addr, ip_ptr + 12, 4);
         std::memcpy(&key.dst_ip.v4.s_addr, ip_ptr + 16, 4);
@@ -413,6 +891,7 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
         ip_hdr_len = ext_offset - link_hdr_len;
         if (pkthdr->caplen < link_hdr_len + ip_hdr_len || ip_total_len < ip_hdr_len) return;
 
+        ip_ttl = ip6_ptr[7];
         key.ip_version = 6;
         std::memcpy(&key.src_ip.v6, ip6_ptr + 8, 16);
         std::memcpy(&key.dst_ip.v6, ip6_ptr + 24, 16);
@@ -432,7 +911,25 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     uint32_t seq = ntohl(raw_seq);
 
     size_t tcp_hdr_len = static_cast<size_t>(tcp_ptr[12] >> 4) * 4;
-    if (tcp_hdr_len < 20 || pkthdr->caplen < link_hdr_len + ip_hdr_len + tcp_hdr_len) return;
+    if (tcp_hdr_len < 20 ||
+        ip_total_len < ip_hdr_len + tcp_hdr_len ||
+        pkthdr->caplen < link_hdr_len + ip_hdr_len + tcp_hdr_len) {
+        return;
+    }
+
+    // JA4T / JA4TS: record the kernel-built SYN and SYN-ACK before the payload-less early exit
+    // Only a genuine SYN or SYN-ACK: SYN+FIN / SYN+RST are scan probes, not connection opens.
+    // ECE/CWR (ECN negotiation), PSH and URG are ignored, as in FoxIO's is_initial_syn.
+    const uint8_t handshake_flags = tcp_ptr[13] & (TCP_FLAG_FIN | TCP_FLAG_SYN | TCP_FLAG_RST | TCP_FLAG_ACK);
+    if (options_.enable_ja4t &&
+        (handshake_flags == TCP_FLAG_SYN || handshake_flags == (TCP_FLAG_SYN | TCP_FLAG_ACK)) &&
+        impl_->observe_syn(key, tcp_ptr, tcp_hdr_len, ip_ttl, pkthdr->ts.tv_sec)) {
+        if (handshake_flags & TCP_FLAG_ACK) {
+            stats_.tcp_synacks.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            stats_.tcp_syns.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 
     size_t total_hdrs = link_hdr_len + ip_hdr_len + tcp_hdr_len;
     if (pkthdr->caplen <= total_hdrs) return; // Pure ACK, SYN, etc.
@@ -457,33 +954,41 @@ void CaptureEngine::handle_packet(const struct pcap_pkthdr *pkthdr, const uint8_
     if (payload_len == 0) return;
 
     // Feed to Two-Tier Accumulator
-    accumulator_->process_segment(key, seq, payload, payload_len, pkthdr->ts.tv_sec);
+    impl_->current_ttl = ip_ttl;
+    impl_->current_packet_time = pkthdr->ts.tv_sec;
+    if (accumulator_) {
+        accumulator_->process_segment(key, seq, payload, payload_len, static_cast<uint64_t>(pkthdr->ts.tv_sec));
+    }
 }
 
-void CaptureEngine::process_assembled_handshake(const FlowKey &key, 
-                                                const uint8_t *record_data, 
-                                                size_t record_len) {
+void CaptureEngine::process_assembled_handshake(WorkerContext &ctx,
+                                                const HandshakeJob &job) {
+    const FlowKey &key = job.key;
+    const uint8_t *record_data = job.record_data;
+    const size_t record_len = job.record_len;
+
     if (record_len < 9 || record_data[0] != TLS_RECORD_HANDSHAKE) return;
 
     uint8_t hs_type = record_data[5]; // Byte 0..4 = Record Header, Byte 5 = Handshake Type
 
+    std::optional<TcpSynData> syn_opt;
+    if (job.has_syn) {
+        syn_opt = job.syn_data;
+    }
+
     if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
-        if (parse_client_hello(record_data, record_len, impl_->client_scratchpad)) {
-            stats_.client_hellos++;
+        if (parse_client_hello(record_data, record_len, ctx.client_scratchpad)) {
+            stats_.client_hellos.fetch_add(1, std::memory_order_relaxed);
 
             // PQ-TLS: second ClientHello after an HRR on the same flow
-            bool after_hrr = false;
-            auto prev = impl_->pqtls_offers.find(key);
-            if (prev != impl_->pqtls_offers.end() && prev->second.hrr_seen) {
-                after_hrr = true;
-            }
-            PqtlsShareMode share_mode = pqtls_share_mode(impl_->client_scratchpad.pqtls, after_hrr);
+            bool after_hrr = ctx.pqtls_offers.after_hrr(key);
+            PqtlsShareMode share_mode = pqtls_share_mode(ctx.client_scratchpad.pqtls, after_hrr);
 
             // PQ-TLS: store offer for ServerHello correlation (post-HRR hello overwrites)
-            impl_->pqtls_offers[key] = make_pqtls_offer(impl_->client_scratchpad.pqtls);
+            ctx.pqtls_offers.store(key, make_pqtls_offer(ctx.client_scratchpad.pqtls));
 
-            JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
-            JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
+            JA3Fingerprint ja3 = compute_ja3(ctx.client_scratchpad);
+            JA4Fingerprint ja4 = compute_ja4(ctx.client_scratchpad);
 
             if (options_.quiet) return;
 
@@ -498,6 +1003,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             uint16_t src_p = ntohs(key.src_port);
             uint16_t dst_p = ntohs(key.dst_port);
 
+            std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
             std::string label_ja3 = impl_->resolve_label(FingerprintKind::JA3, ja3.md5_hash, options_.prompt_unknown);
             std::string label_ja4 = impl_->resolve_label(FingerprintKind::JA4, ja4.full_fp, options_.prompt_unknown);
 
@@ -514,38 +1020,33 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << Color::BOLD << ja4.full_fp << Color::RESET << "  "
                       << (label_ja4 != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4 << "]" << Color::RESET << "\n";
 
+            if (options_.enable_ja4t) {
+                stats_.cross_layer_alerts.fetch_add(
+                    impl_->report_tcp_fingerprint(FingerprintKind::JA4T, "JA4T: ", syn_opt, job.ip_ttl, "ClientHello", options_) +
+                    impl_->report_impersonation(syn_opt, ja3.md5_hash, ja4.full_fp, options_),
+                    std::memory_order_relaxed
+                );
+            }
+
             if (options_.verbose) {
-                print_verbose_client(impl_->client_scratchpad, ja3, ja4);
-                print_pqtls_client(impl_->client_scratchpad, share_mode);
+                print_verbose_client(ctx.client_scratchpad, ja3, ja4);
+                print_pqtls_client(ctx.client_scratchpad, share_mode);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;
             }
         }
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
-        if (parse_server_hello(record_data, record_len, impl_->server_scratchpad)) {
-            stats_.server_hellos++;
+        if (parse_server_hello(record_data, record_len, ctx.server_scratchpad)) {
+            stats_.server_hellos.fetch_add(1, std::memory_order_relaxed);
 
-            // PQ-TLS: correlate with client offer via reversed 4-tuple
-            PqtlsOffer offer;  // seen = false if no ClientHello
-            auto it = impl_->pqtls_offers.find(reverse_key(key));
-            if (it != impl_->pqtls_offers.end()) {
-                offer = it->second;
-            }
-            PqtlsPosture posture = pqtls_posture(offer, impl_->server_scratchpad.pqtls,
-                                                 impl_->server_scratchpad.selected_version);
+            // PQ-TLS: correlate with client offer (final ServerHello evicts, HRR keeps)
+            PqtlsOffer offer = ctx.pqtls_offers.take(key, ctx.server_scratchpad.pqtls.is_hrr);
+            PqtlsPosture posture = pqtls_posture(offer, ctx.server_scratchpad.pqtls,
+                                                 ctx.server_scratchpad.selected_version);
 
-            // Final ServerHello: evict offer. HRR: keep and mark for the retry
-            if (it != impl_->pqtls_offers.end()) {
-                if (impl_->server_scratchpad.pqtls.is_hrr) {
-                    it->second.hrr_seen = true;
-                } else {
-                    impl_->pqtls_offers.erase(it);
-                }
-            }
-
-            JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
-            JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
+            JA3Fingerprint ja3s = compute_ja3s(ctx.server_scratchpad);
+            JA4Fingerprint ja4s = compute_ja4s(ctx.server_scratchpad);
 
             if (options_.quiet) return;
 
@@ -560,6 +1061,7 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
             uint16_t src_p = ntohs(key.src_port);
             uint16_t dst_p = ntohs(key.dst_port);
 
+            std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
             std::string label_ja3s = impl_->resolve_label(FingerprintKind::JA3S, ja3s.md5_hash, options_.prompt_unknown);
             std::string label_ja4s = impl_->resolve_label(FingerprintKind::JA4S, ja4s.full_fp, options_.prompt_unknown);
 
@@ -576,9 +1078,16 @@ void CaptureEngine::process_assembled_handshake(const FlowKey &key,
                       << Color::BOLD << ja4s.full_fp << Color::RESET << "  "
                       << (label_ja4s != "<unknown>" ? Color::GREEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESET << "\n";
 
+            if (options_.enable_ja4t) {
+                stats_.cross_layer_alerts.fetch_add(
+                    impl_->report_tcp_fingerprint(FingerprintKind::JA4TS, "JA4TS: ", syn_opt, job.ip_ttl, "ServerHello", options_),
+                    std::memory_order_relaxed
+                );
+            }
+
             if (options_.verbose) {
-                print_verbose_server(impl_->server_scratchpad, ja3s, ja4s);
-                print_pqtls_server(impl_->server_scratchpad, posture);
+                print_verbose_server(ctx.server_scratchpad, ja3s, ja4s);
+                print_pqtls_server(ctx.server_scratchpad, posture);
             }
             if (!options_.interface_name.empty()) {
                 std::cout << std::flush;

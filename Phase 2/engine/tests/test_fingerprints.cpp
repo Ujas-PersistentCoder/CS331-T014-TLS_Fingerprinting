@@ -714,6 +714,95 @@ TEST(JA4STest, CanonicalJA4SStringGeneration) {
     EXPECT_EQ(ja4s.full_fp.length(), 25u) << "JA4S full fingerprint must be exactly 25 characters (7 + 1 + 4 + 1 + 12)";
 }
 
+// FoxIO reference vectors: values from FoxIO-LLC/ja4 python/test/testdata/*.json
+
+TEST(JA4Test, FoxIOReferenceVector) {
+    // tls-handshake.pcapng stream 0, wire order from JA4_ro.1
+    ClientHelloData client{};
+    client.client_version = 0x0303;
+    client.supported_versions = {0x0304, 0x0303};
+    client.first_alpn = "h2";
+    client.cipher_suites = {0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9,
+                            0xcca8, 0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035};
+    client.extensions = {0xff01, 0x0033, 0x002d, 0x0005, 0x4469, 0x000d, 0x0010, 0x0023,
+                         0x001b, 0x002b, 0x0000, 0x0012, 0x000a, 0x0017, 0x000b, 0x0015};
+    client.signature_algorithms = {0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601};
+
+    EXPECT_EQ(compute_ja4(client).full_fp, "t13d1516h2_8daaf6152771_e5627efa2ab1");
+}
+
+TEST(JA4Test, SniFlagFollowsExtensionPresence) {
+    ClientHelloData client{};
+    client.client_version = 0x0303;
+    client.cipher_suites = {0xc02b};
+    client.extensions = {0x0000};
+    client.has_sni = true;
+    client.sni = "192.168.1.1"; // Spec: any SNI extension means 'd', even an IP literal
+    EXPECT_EQ(compute_ja4(client).ja4_a, "t12d010100");
+
+    client.extensions = {0x000a};
+    EXPECT_EQ(compute_ja4(client).ja4_a, "t12i010100");
+}
+
+TEST(JA4Test, VersionIsHighestSupportedVersion) {
+    ClientHelloData client{};
+    client.client_version = 0x0303;
+    client.supported_versions = {0x0303, 0x7f1c}; // Highest value is unknown -> "00"
+    EXPECT_EQ(compute_ja4(client).ja4_a.substr(1, 2), "00");
+
+    client.supported_versions.clear();
+    client.client_version = 0x0002; // SSL 2.0 per the spec table
+    EXPECT_EQ(compute_ja4(client).ja4_a.substr(1, 2), "s2");
+}
+
+TEST(JA4Test, AlpnSpecExamples) {
+    struct Case { std::string raw; const char *want; };
+    const Case cases[] = {
+        {"h2", "h2"}, {"http/1.1", "h1"}, {"H3", "H3"}, {"x", "xx"}, {"", "00"},
+        // Every hex example from technical_details/JA4.md, "ALPN Extension Value"
+        {"\xab", "ab"}, {"\x20", "20"}, {"\xab\xcd", "ad"}, {"\x20\x61", "21"},
+        {"\x30\xab", "3b"}, {"\x61\x20", "60"}, {"\x30\x31\xab\xcd", "3d"}, {"\x30\xab\xcd\x31", "01"},
+        {"\xba\xad", "bd"}, // FoxIO tls-non-ascii-alpn.pcapng
+    };
+    for (const Case &c : cases) {
+        ClientHelloData client{};
+        client.client_version = 0x0303;
+        client.first_alpn = c.raw;
+        EXPECT_EQ(compute_ja4(client).ja4_a.substr(8, 2), c.want) << "ALPN bytes of length " << c.raw.size();
+    }
+}
+
+TEST(JA4STest, FoxIOReferenceVectors) {
+    ServerHelloData server{};
+    server.server_version = 0x0303;
+    server.selected_version = 0x0304;
+    server.selected_cipher = 0x1301;
+
+    // tls-handshake.pcapng streams 0 and 31: extension ORDER is part of the fingerprint
+    server.extensions = {0x0033, 0x002b};
+    EXPECT_EQ(compute_ja4s(server).full_fp, "t130200_1301_234ea6891581");
+    server.extensions = {0x002b, 0x0033, 0x0029};
+    EXPECT_EQ(compute_ja4s(server).full_fp, "t130300_1301_0ee26285a86f");
+
+    // badcurveball.pcap: TLS 1.2, ALPN stays in the hash
+    ServerHelloData tls12{};
+    tls12.server_version = 0x0303;
+    tls12.selected_cipher = 0xc02b;
+    tls12.extensions = {0x0000, 0xff01, 0x000b, 0x0023, 0x0010};
+    tls12.first_alpn = "http/1.1";
+    EXPECT_EQ(compute_ja4s(tls12).full_fp, "t1205h1_c02b_845f7282a956");
+}
+
+TEST(JA3STest, GreaseExcludedButKeptForJA4S) {
+    ServerHelloData server{};
+    server.server_version = 0x0303;
+    server.selected_version = 0x0304;
+    server.selected_cipher = 0x1301;
+    server.extensions = {0x0a0a, 0x002b};
+    EXPECT_EQ(compute_ja3s(server).raw_string, "771,4865,43");
+    EXPECT_EQ(compute_ja4s(server).ja4_a, "t130200"); // GREASE counted, as in FoxIO's reference
+}
+
 // ============================================================
 // MIDDLEBOX & LAYER 4 KERNEL ANOMALY TESTS
 // ============================================================

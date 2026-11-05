@@ -10,6 +10,15 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose build type" FORCE)
 endif()
 
+# macOS dynamic linker (dyld) RPATH configuration
+if(APPLE)
+    set(CMAKE_MACOSX_RPATH ON)
+    set(CMAKE_SKIP_BUILD_RPATH FALSE)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+    list(APPEND CMAKE_BUILD_RPATH "/opt/homebrew/lib" "/usr/local/lib")
+endif()
+
 # 1. OS-Agnostic Packet Capture Dependency
 find_path(PCAP_INCLUDE_DIR NAMES pcap.h PATH_SUFFIXES pcap include)
 find_library(PCAP_LIBRARY NAMES pcap wpcap Packet)
@@ -35,6 +44,7 @@ add_library(tlsfp_phase2_lib STATIC
     src/parser.cpp
     src/ja3.cpp
     src/ja4.cpp
+    src/ja4t.cpp
     src/db.cpp
     src/pqtls_parser.cpp
     src/pqtls_analysis.cpp
@@ -67,29 +77,71 @@ else()
         -Wall -Wextra -Wpedantic
         $<$<CONFIG:Release>:-O3>
         $<$<CONFIG:Debug>:-g3>
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+    )
+    # PUBLIC: executables linking this static lib need the sanitizer runtimes too
+    target_link_options(tlsfp_phase2_lib PUBLIC
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
     )
 endif()
 
-# 5. CLI Executable
-add_executable(tlsfp_phase2 src/main.cpp)
-target_link_libraries(tlsfp_phase2 PRIVATE tlsfp_phase2_lib)
+# CLI Executable
+add_executable(tlsfp_phase2
+    src/main.cpp
+)
 
-# 6. Cross-Platform Unit Testing Setup (FetchContent requires zero system GTest setup)
+target_link_libraries(tlsfp_phase2
+    PRIVATE
+        tlsfp_phase2_lib
+)
+
+# Unit tests (ctest)
 enable_testing()
+
+# 1. JA4T standalone test runner
+add_executable(tlsfp_phase2_tests
+    tests/test_ja4t.cpp
+)
+target_link_libraries(tlsfp_phase2_tests
+    PRIVATE
+        tlsfp_phase2_lib
+)
+add_test(NAME ja4t COMMAND tlsfp_phase2_tests)
+
+# 2. GoogleTest-based unit tests
+# Always build GoogleTest from source via FetchContent as static libraries.
+# This eliminates macOS dyld @rpath errors, Conda/Homebrew shared dylib conflicts,
+# and SIP stripping DYLD_LIBRARY_PATH during test execution.
 include(FetchContent)
 FetchContent_Declare(
     googletest
     URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+
+if(NOT TARGET GTest::gtest)
+    add_library(GTest::gtest ALIAS gtest)
+endif()
+if(NOT TARGET GTest::gtest_main)
+    add_library(GTest::gtest_main ALIAS gtest_main)
+endif()
 
 add_executable(unit_tests
     tests/test_fingerprints.cpp
     tests/test_pqtls_parser.cpp
     tests/test_pqtls_analysis.cpp
 )
-target_link_libraries(unit_tests PRIVATE tlsfp_phase2_lib gtest gtest_main)
+target_link_libraries(unit_tests
+    PRIVATE
+        tlsfp_phase2_lib
+        GTest::gtest
+        GTest::gtest_main
+)
 
 include(GoogleTest)
-gtest_discover_tests(unit_tests)
+gtest_discover_tests(unit_tests
+    DISCOVERY_MODE PRE_TEST
+)

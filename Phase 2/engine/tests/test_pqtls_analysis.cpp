@@ -2,6 +2,7 @@
 // Byte-level parsing is covered in test_pqtls_parser.cpp.
 
 #include <gtest/gtest.h>
+#include <arpa/inet.h>
 
 #include "tlsfp/pqtls_analysis.hpp"
 
@@ -390,4 +391,111 @@ TEST(PqtlsAnalysisTest, KnownClassicalGroups) {
     EXPECT_TRUE(is_known_classical_group(0x0104));   // ffdhe8192
     EXPECT_FALSE(is_known_classical_group(0x11ec));  // PQ hybrid
     EXPECT_FALSE(is_known_classical_group(0x1234));  // unknown
+}
+
+// ============================================================
+// OFFER TABLE (per worker, bounded)
+// ============================================================
+
+namespace {
+
+// Client -> server key, client port varies per flow
+FlowKey client_key(uint16_t client_port) {
+    FlowKey k;
+    k.ip_version = 4;
+    k.src_ip.v4.s_addr = htonl(0x0a000001);  // 10.0.0.1
+    k.dst_ip.v4.s_addr = htonl(0x01010101);  // 1.1.1.1
+    k.src_port = htons(client_port);
+    k.dst_port = htons(443);
+    return k;
+}
+
+// Same flow, server -> client
+FlowKey server_key(uint16_t client_port) {
+    FlowKey k = client_key(client_port);
+    std::swap(k.src_ip, k.dst_ip);
+    std::swap(k.src_port, k.dst_port);
+    return k;
+}
+
+PqtlsOffer pq_offer() {
+    PqtlsOffer offer;
+    offer.seen = true;
+    offer.pq_group = 0x11ec;
+    offer.pq_key_sent = true;
+    return offer;
+}
+
+} // anonymous namespace
+
+// ServerHello finds the offer by the reversed key, then it is removed
+TEST(PqtlsOfferTableTest, FinalServerHelloTakesAndRemoves) {
+    PqtlsOfferTable table;
+    table.store(client_key(50000), pq_offer());
+    EXPECT_EQ(table.size(), 1u);
+
+    PqtlsOffer offer = table.take(server_key(50000), false);
+    EXPECT_TRUE(offer.seen);
+    EXPECT_EQ(offer.pq_group, 0x11ec);
+    EXPECT_EQ(table.size(), 0u);
+}
+
+// ServerHello with no ClientHello on the flow
+TEST(PqtlsOfferTableTest, MissingOfferIsNotSeen) {
+    PqtlsOfferTable table;
+    PqtlsOffer offer = table.take(server_key(50000), false);
+    EXPECT_FALSE(offer.seen);
+}
+
+// HRR keeps the offer for the retry; second ClientHello sees after_hrr
+TEST(PqtlsOfferTableTest, HrrKeepsOfferForRetry) {
+    PqtlsOfferTable table;
+    table.store(client_key(50000), pq_offer());
+    EXPECT_FALSE(table.after_hrr(client_key(50000)));
+
+    table.take(server_key(50000), true);  // HRR
+    EXPECT_EQ(table.size(), 1u);
+    EXPECT_TRUE(table.after_hrr(client_key(50000)));
+
+    table.store(client_key(50000), pq_offer());  // post-HRR ClientHello overwrites
+    EXPECT_FALSE(table.after_hrr(client_key(50000)));
+
+    EXPECT_TRUE(table.take(server_key(50000), false).seen);
+    EXPECT_EQ(table.size(), 0u);
+}
+
+// Review issue: flows without a ServerHello must not grow the table forever
+TEST(PqtlsOfferTableTest, SizeNeverExceedsMax) {
+    PqtlsOfferTable table(8);
+    for (uint16_t port = 1000; port < 1100; ++port) {
+        table.store(client_key(port), pq_offer());
+        EXPECT_LE(table.size(), 8u);
+    }
+}
+
+// When full, the oldest offers go and the newest stay
+TEST(PqtlsOfferTableTest, FullTableDropsOldestKeepsNewest) {
+    PqtlsOfferTable table(4);
+    table.store(client_key(1), pq_offer());
+    table.store(client_key(2), pq_offer());
+    table.store(client_key(3), pq_offer());
+    table.store(client_key(4), pq_offer());
+    table.store(client_key(5), pq_offer());  // full: older half (1, 2) dropped
+
+    EXPECT_EQ(table.size(), 3u);
+    EXPECT_FALSE(table.take(server_key(1), false).seen);
+    EXPECT_FALSE(table.take(server_key(2), false).seen);
+    EXPECT_TRUE(table.take(server_key(3), false).seen);
+    EXPECT_TRUE(table.take(server_key(5), false).seen);
+}
+
+// Updating an existing flow does not evict anything
+TEST(PqtlsOfferTableTest, OverwriteSameFlowDoesNotEvict) {
+    PqtlsOfferTable table(2);
+    table.store(client_key(1), pq_offer());
+    table.store(client_key(2), pq_offer());
+    table.store(client_key(2), pq_offer());  // same flow again
+
+    EXPECT_EQ(table.size(), 2u);
+    EXPECT_TRUE(table.take(server_key(1), false).seen);
 }

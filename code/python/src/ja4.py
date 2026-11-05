@@ -1,46 +1,42 @@
 import hashlib
-import ipaddress
+import string
 from src.parser import ClientHelloFields, ServerHelloFields
 from src.ja3 import filter_grease, is_grease
 
-def is_literal_ip(hostname: str | None) -> bool:
-    if not hostname:
-        return False
-    try:
-        ipaddress.ip_address(hostname)
-        return True
-    except ValueError:
-        return False
+# JA4 spec version table (technical_details/JA4.md, "TLS and DTLS Version")
+JA4_VERSION_CODES = {
+    0x0304: "13", 0x0303: "12", 0x0302: "11", 0x0301: "10",
+    0x0300: "s3", 0x0002: "s2",
+    0xfeff: "d1", 0xfefd: "d2", 0xfefc: "d3",
+}
+ASCII_ALNUM = frozenset(string.ascii_letters + string.digits)
+
+def ja4_version_code(version: int) -> str:
+    return JA4_VERSION_CODES.get(version, "00")
 
 def resolve_ja4_version(fields: ClientHelloFields) -> str:
-    if fields.supported_versions:
-        filtered = filter_grease(fields.supported_versions)
-        if 0x0304 in filtered: return "13"
-        if 0x0303 in filtered: return "12"
-        if 0x0302 in filtered: return "11"
-        if 0x0301 in filtered: return "10"
-        
-    v = fields.tls_version
-    if v == 0x0304: return "13"
-    if v == 0x0303: return "12"
-    if v == 0x0302: return "11"
-    if v == 0x0301: return "10"
-    if v == 0x0300: return "s3"
-    if v == 0x0200: return "s2"
-    if v == 0x0100: return "s1"
-    return "00"
+    # Highest non-GREASE supported_versions value, else the ClientHello legacy_version.
+    # An unknown highest value maps to "00", as in FoxIO's reference.
+    versions = filter_grease(fields.supported_versions or ())
+    if versions:
+        return ja4_version_code(max(versions))
+    return ja4_version_code(fields.tls_version)
 
 def resolve_alpn_chars(alpn: tuple[str, ...] | None) -> str:
+    """First and last character of the FIRST ALPN value as sent (GREASE included).
+
+    Values are latin-1 decoded, so each character is one wire byte. If either end is not
+    ASCII alphanumeric, use the first and last characters of the value's hex encoding
+    (spec examples: 0xAB -> "ab", 0x30 0xAB -> "3b", 0x61 0x20 -> "60").
+    """
     if not alpn or not alpn[0]:
         return "00"
     first_alpn = alpn[0]
-    
-    f = first_alpn[0]
-    l = first_alpn[-1]
-    
-    f_char = f.lower() if (f.isalnum() and f.isascii()) else '0'
-    l_char = l.lower() if (l.isalnum() and l.isascii()) else '0'
-    return f_char + l_char
+    f, l = first_alpn[0], first_alpn[-1]
+    if f in ASCII_ALNUM and l in ASCII_ALNUM:
+        return f + l
+    hex_value = first_alpn.encode("latin-1").hex()
+    return hex_value[0] + hex_value[-1]
 
 def _sha256_hex12(data: str) -> str:
     if not data:
@@ -54,10 +50,9 @@ def compute_ja4_a(fields: ClientHelloFields) -> str:
     protocol = 't' # TCP
     version = resolve_ja4_version(fields)
     
-    if fields.server_name and not is_literal_ip(fields.server_name):
-        sni = 'd'
-    else:
-        sni = 'i'
+    # 'd' whenever the SNI extension is present, whatever it contains (spec: "If the SNI
+    # extension (0x0000) exists, then the destination of the connection is a domain")
+    sni = 'd' if 0x0000 in fields.extensions else 'i'
         
     ciphers_count = min(len(filter_grease(fields.cipher_suites)), 99)
     # The Python implementation follows the JA4 test vectors, counting all
@@ -105,26 +100,22 @@ def compute_ja4_string(fields: ClientHelloFields) -> str:
 def compute_ja4s_a(fields: ServerHelloFields) -> str:
     protocol = 't' # TCP
     
-    ver = fields.supported_version if fields.supported_version and not is_grease(fields.supported_version) else fields.tls_version
-    
-    if ver == 0x0304: version = "13"
-    elif ver == 0x0303: version = "12"
-    elif ver == 0x0302: version = "11"
-    elif ver == 0x0301: version = "10"
-    else: version = "00"
-    
-    exts_count = min(_ja4_ext_count(fields.extensions), 99)
+    sv = fields.supported_version
+    version = ja4_version_code(sv if sv and not is_grease(sv) else fields.tls_version)
+
+    # Every extension the server sent, ALPN and GREASE included (FoxIO reference to_ja4s:
+    # "extensions ... in the order they are present (include grease values)")
+    exts_count = min(len(fields.extensions), 99)
     alpn_chars = resolve_alpn_chars((fields.alpn,) if fields.alpn else None)
-    
+
     return f"{protocol}{version}{exts_count:02d}{alpn_chars}"
 
 def compute_ja4s_b(fields: ServerHelloFields) -> str:
     return f"{fields.cipher_suite:04x}"
 
 def compute_ja4s_c_raw(fields: ServerHelloFields) -> str:
-    exts = filter_grease(fields.extensions)
-    filtered = [e for e in exts if e != 0x0010]
-    return ",".join(f"{e:04x}" for e in sorted(filtered))
+    # Wire order, nothing sorted or removed: the server's extension order is its fingerprint
+    return ",".join(f"{e:04x}" for e in fields.extensions)
 
 def compute_ja4s_c(fields: ServerHelloFields) -> str:
     raw = compute_ja4s_c_raw(fields)

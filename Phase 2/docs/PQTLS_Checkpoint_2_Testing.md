@@ -120,13 +120,38 @@ unchanged, so these still apply): the tshark comparison on `pq_ech_chrome.pcap`,
 `chrome.pcap`, `curl.pcap` and `cloudflare_run1.pcap` described above, and `ok` on all
 20,391 hellos across the captures.
 
+## Update: main merged into this branch (multithreading)
+
+`origin/main` (JA4T + multithreaded worker pool, up to `fa6560e`) was merged into
+`feature/pq-tls`. Main itself was not changed. Two review points were fixed with it:
+
+1. **Data race on `pqtls_offers`.** Main now runs several worker threads. The offers moved
+   from one shared map in `Impl` into `WorkerContext` (one table per worker). Main sends both
+   directions of a connection to the same worker (`compute_symmetric_flow_hash`), so a
+   ClientHello and its ServerHello always meet in the same table and no lock is needed.
+   The `[V-PQTLS-*]` lines are printed inside the existing `stdout_mutex` block.
+2. **Unbounded offers.** New `PqtlsOfferTable` in `pqtls_analysis.hpp/.cpp`, at most
+   `PQTLS_OFFER_TABLE_MAX` (65536, same as the SYN table) entries per worker. When full,
+   the older half is dropped; these are flows whose ServerHello never came. A dropped flow
+   that does get a ServerHello later shows `UNKNOWN_NO_CLIENT_HELLO`, which is honest.
+   There is no FIN/RST eviction: TCP flags are seen on the capture thread, the table lives
+   on the worker.
+
+Not a bug (checked): TLS 1.2 posture. `parse_server_hello` falls back to `server_version`
+(`0x0303`) when `supported_versions` is absent, so TLS 1.2 gets the classical label.
+
+**Checked after the merge** (GCC 13.3, Linux, Debug build with ASan + UBSan):
+
+| Check | Result |
+| :--- | :--- |
+| Unit tests | **96/96 pass** (`ctest`, includes main's JA4T tests); 44 PQ-TLS tests (38 + 6 new `PqtlsOfferTableTest`) |
+| PQ-TLS output vs `9d6c057` | Identical `[V-PQTLS-*]` lines (sorted) on 48 of 49 captures with `-j 4` |
+| `code/pcaps/test_new.pcap` | Differs only because main's engine now sees the 22 ClientHellos the old engine missed: was 22 × `UNKNOWN (ClientHello not seen)`, now 11 × `HYBRID_SELECTED_OBSERVED` + 11 × `CLASSICAL_SELECTED_AFTER_HYBRID_OFFER`; same with `-j 1` and `-j 4` |
+| Memory safety | 0 ASan/UBSan findings over all captures with `-j 8` |
+
 ## Still not done
 
-- **`pqtls_offers` has no cap or expiry.** Every ClientHello adds an entry; it is removed
-  only when a normal ServerHello arrives. Connections whose server never answers stay in
-  memory. This affects large offline captures as well as long live captures, and it is an
-  **unmet charter requirement** ("no unbounded allocations in packet callbacks"). Not fixed
-  in this pass.
+- Offer table has a size bound but no time expiry, and no FIN/RST eviction (see update above).
 - **Unified JSON output** (charter section 3) is deferred until integration with the JSON
   writer on `feature/ech`.
 - **Shared transport work, ownership to be confirmed:** handling of sequence gaps (the

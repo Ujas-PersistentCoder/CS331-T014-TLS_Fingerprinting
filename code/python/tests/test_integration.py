@@ -21,8 +21,9 @@ def test_integration_sigalg_grease():
     ja4 = compute_ja4_string(client_hellos[0].client_hello)
     ja4s = compute_ja4s_string(server_hellos[0].server_hello)
     
+    # Both match FoxIO's expected output (python/test/testdata/sigalg-grease.pcapng.json)
     assert ja4 == "t13d1517h2_8daaf6152771_cb7bf5808d99"
-    assert ja4s == "t130200_1302_a56c5b993250"
+    assert ja4s == "t130200_1302_234ea6891581"
 
 def test_integration_tls_non_ascii_alpn():
     pcap_path = PCAPS_DIR / 'tls-non-ascii-alpn.pcapng'
@@ -39,6 +40,9 @@ def test_integration_tls_non_ascii_alpn():
     ja4 = compute_ja4_string(client_hellos[0].client_hello)
     ja4s = compute_ja4s_string(server_hellos[0].server_hello)
     
-    # Note: 00 at the end of ja4 prefix because non-ascii ALPN maps to '00'
-    assert ja4 == "t13d151600_8daaf6152771_e5627efa2ab1"
-    assert ja4s == "t130200_1301_a56c5b993250"
+    # First ALPN value is 0xBA 0xAD: not alphanumeric, so the spec takes the first and last
+    # characters of its hex "baad" -> "bd". (FoxIO's reference tool still prints "99" here;
+    # this follows technical_details/JA4.md.)
+    assert ja4 == "t13d1516bd_8daaf6152771_e5627efa2ab1"
+    # Matches FoxIO's expected JA4S (python/test/testdata/tls-non-ascii-alpn.pcapng.json)
+    assert ja4s == "t130200_1301_234ea6891581"
