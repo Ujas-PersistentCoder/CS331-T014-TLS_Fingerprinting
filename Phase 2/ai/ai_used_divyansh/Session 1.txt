@@ -1,0 +1,1227 @@
+
+> <ide_opened_file>The user opened the file
+  e:\CS331-T014-TLS_Fingerprinting\code\gui\main.py in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+> Hi, Claude. This is our project for TLS fingerprinting.
+
+  Please go through it. We need to update it to use JA4T as well. Please use
+  discretion and add support for JA4T.
+  Also from a discussion, it came out that we need to expand to the Network
+  layer to detect "spoofing". Is JA4T related to that?
+
+  To be completely honest, I am kind of stumped by what is happening. After
+  making the neccessary additions, I need you to tell me what is going on, and
+  what exactly is JA4T.
+
+● I'll start by getting a picture of the project layout.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● There are three implementations here (Python, C++, and a Phase 2 C++ engine)
+  plus a GUI. Next I'll read the README and the Phase 2 docs.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The Phase 2 docs already plan for this: "Track A: JA4T & Cross-Layer
+  Impersonation Detection" in the Phase 2 C++ engine. So the engine is where the
+  work goes. Reading its code now.
+
+  Read 2 files, ran 3 shell commands (ctrl+o to expand)
+
+● Now the JA4 implementation, the DB layer (I need to know how FingerprintKind
+  is used), and the seed catalog format.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● WSL Ubuntu is installed, so I can build the engine there. Before that, I'll
+  check whether JA4T appears anywhere already, and check the remote JA4T branch.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The WSL toolchain is set up, but the JA4T branch is still identical to main,
+  so no work has begun on it. I'm building the current engine for a baseline and
+  checking which pcaps have TCP SYN packets.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The baseline builds cleanly. Next I'll survey which pcaps contain SYN and
+  SYN-ACK packets and save baseline output so I can check for regressions later.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The repo's pcaps show three TCP/IP stacks: Linux and macOS at TTL 64 (told
+  apart by their SYN option layout) and Windows at TTL 128. I'm saving baseline
+  engine output for every pcap so I can confirm the JA3/JA4 results stay
+  unchanged after my edits.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The inline loop got mangled by the shell layering, so I'll put the commands in
+  a script file instead.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Git Bash is rewriting the /mnt/... paths. I'll call WSL from PowerShell
+  instead.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● WSL cleared /tmp when it restarted, so the build is gone. I'll rebuild into a
+  persistent home-directory folder.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Quoting is breaking across the PowerShell→WSL hop too. I'll put every step
+  into script files that take no space-containing arguments.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The baseline is set, with Redis live and 64 catalog records loaded. Next I'll
+  check which catalog labels match the SYN-bearing pcaps, since that shows how
+  the impersonation alerts will behave on real traffic.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● WSL's home directory isn't reachable from Git Bash, so I'll copy the outputs
+  into the scratchpad.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● PowerShell is splitting that path at its spaces. I'll create a space-free
+  symlink to the scratchpad inside WSL with a small script.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● The catalog's os field records where a fingerprint was captured, not what the
+  TLS stack implies, so Chrome's os: linux JA4 is really from a Mac and a naive
+  OS-mismatch check would wrongly flag it. I'm checking how Redis stores records
+  before deciding how to represent an OS claim.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Seeds get re-written to Redis on every start, and each record holds only one
+  os, so I'll add a separate opt-in expected_os field for the impersonation
+  check and leave os as is. Before coding, I'm verifying the exact JA4T format
+  against FoxIO's spec.
+
+● Fetch(https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4T.md)
+  ⎿  Received 0 bytes (404 Not Found)
+● Web Search("FoxIO JA4T TCP fingerprint format window size options MSS window
+            scale example 64240_2-1-3-1-1-4_1460_8")
+  ⎿  Did 1 search in 9s
+
+● Fetch(https://medium.com/foxio/ja4t-tcp-fingerprinting-12fb7ce9cb5a)
+  ⎿  Received 0 bytes (403 Forbidden)
+
+● Medium blocks automated fetches, so I'll try the FoxIO repository directly.
+
+● Fetch(https://raw.githubusercontent.com/FoxIO-LLC/ja4/main/README.md)
+  ⎿  Received 19.9KB (200 OK)
+
+● The field order and the Windows 11 reference value check out, and JA4T and
+  JA4TS fall under the FoxIO License 1.1, which allows academic use. Next I'm
+  looking at FoxIO's reference implementation for the rules on absent options
+  and EOL padding.
+
+● Fetch(https://raw.githubusercontent.com/FoxIO-LLC/ja4/main/zeek/ja4t/main.zeek
+       )
+  ⎿  Received 0 bytes (404 Not Found)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● FoxIO's Zeek implementation stops at EOL rather than listing each padding
+  byte, which contradicts what I remembered. I'll check the Rust implementation
+  and its test snapshots to settle it.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● FoxIO's Rust/Wireshark and Zeek implementations handle EOL padding
+  differently, with Rust/Wireshark keeping every padding byte. I'll treat
+  Rust/Wireshark as canonical and check its edge-case unit tests next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● I have FoxIO's formatting rules and test vectors in hand, and the Python app
+  reads the same Redis keys. Before adding an expected_os field, I'm checking
+  that the Python reader will tolerate an unknown field.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The Python reader selects fields by name, so the extra expected_os field in
+  Redis won't affect it. Next I'm writing a new JA4T module for TCP SYN option
+  parsing, the fingerprint, and OS inference.
+
+● Write(Phase 2\engine\include\tlsfp\ja4t.hpp)
+  ⎿  Wrote 110 lines to Phase 2\engine\include\tlsfp\ja4t.hpp
+       1 #ifndef TLSFP_JA4T_HPP
+       2 #define TLSFP_JA4T_HPP
+       3
+       4 #include <array>
+       5 #include <cstdint>
+       6 #include <cstddef>
+       7 #include <string>
+       8 #include <string_view>
+       9
+      10 namespace tlsfp {
+     … +100 lines (ctrl+o to expand)
+
+● Now the implementation. It follows the FoxIO Rust/Wireshark rules: every
+  option kind byte is listed, EOL padding included, 00 stands for absent fields,
+  and MSS is padded to two digits.
+
+● Write(Phase 2\engine\src\ja4t.cpp)
+  ⎿  Wrote 206 lines to Phase 2\engine\src\ja4t.cpp
+       1 #include "tlsfp/ja4t.hpp"
+       2 #include <algorithm>
+       3 #include <cctype>
+       4
+       5 namespace tlsfp {
+       6
+       7 namespace {
+       8
+       9 // %02d semantics used by the FoxIO reference implementation (9
+         -> "09", 1460 -> "1460")
+     … +197 lines (ctrl+o to expand)
+
+● Next, types.hpp gets the new fingerprint kinds and the limits for the SYN
+  table.
+
+● Update(Phase 2\engine\include\tlsfp\types.hpp)
+  ⎿  Added 2 lines
+      18  constexpr size_t MAX_TLS_RECORD_LENGTH = 16384;      // RFC 844
+          6 max record payload (16 KB)
+      19  constexpr size_t ACCUMULATOR_BUFFER_SIZE = 8192;     // 8 KB bu
+          ffer: covers Kyber/ML-KEM PQ-TLS (2.5-3.5 KB)
+      20  constexpr uint32_t FLOW_TIMEOUT_SECONDS = 3;         // Incompl
+          ete handshake expiration window
+      21 +constexpr uint32_t SYN_TIMEOUT_SECONDS = 30;         // SYN -> 
+         +ClientHello correlation window (JA4T)                          
+      22 +constexpr size_t   SYN_TABLE_MAX_ENTRIES = 65536;    // Bound o
+         +n tracked SYNs (SYN flood guard)                               
+      23  
+      24  // --- Flow Identification (4-tuple) ---
+      25  struct FlowKey {
+
+● Update(Phase 2\engine\include\tlsfp\types.hpp)
+  ⎿  Added 3 lines, removed 1 line
+      75      JA3,
+      76      JA3S,
+      77      JA4,
+      78 -    JA4S                                                       
+      78 +    JA4S,                                                      
+      79 +    JA4T,  // TCP SYN (client kernel stack)                    
+      80 +    JA4TS  // TCP SYN-ACK (server kernel stack)                
+      81  };
+      82  
+      83  struct JA3Fingerprint {
+
+● Now the database layer: the new kinds, expected_os round-tripped through JSON
+  and Redis, and the server role for JA4TS.
+
+● Update(Phase 2\engine\include\tlsfp\db.hpp)
+  ⎿  Added 2 lines, removed 1 line
+      17      std::string role;
+      18      std::string name;
+      19      std::string version;
+      20 -    std::string os;                                            
+      20 +    std::string os;          // Where the fingerprint was obser
+         +ved (informational)                                            
+      21 +    std::string expected_os; // OS this TLS stack only ships on
+         +; enables the JA4T impersonation check                         
+      22      std::string category;
+      23      std::string source;
+      24      std::string notes;
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 4 lines, removed 1 line
+      39  
+      40              std::string section;
+      41              if (!read_string(section) || !consume(':')) return 
+          false;
+      42 -            if (section == "ja3" || section == "ja3s" || sectio
+         -n == "ja4" || section == "ja4s") {                             
+      42 +            if (section == "ja3" || section == "ja3s" || sectio
+         +n == "ja4" || section == "ja4s" ||                             
+      43 +                section == "ja4t" || section == "ja4ts") {     
+      44                  FingerprintKind kind = FingerprintKind::JA3;
+      45                  if (section == "ja3s") kind = FingerprintKind::
+          JA3S;
+      46                  if (section == "ja4") kind = FingerprintKind::J
+          A4;
+      47                  if (section == "ja4s") kind = FingerprintKind::
+          JA4S;
+      48 +                if (section == "ja4t") kind = FingerprintKind::
+         +JA4T;                                                          
+      49 +                if (section == "ja4ts") kind = FingerprintKind:
+         +:JA4TS;                                                        
+      50                  if (!read_seed_array(kind, manifest, records)) 
+          return false;
+      51              } else if (!skip_value()) {
+      52                  return false;
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 2 lines, removed 2 lines
+      119              FingerprintRecord record;
+      120              record.kind = kind;
+      121              record.hash = fields["hash"];
+      122 -            record.role = (kind == FingerprintKind::JA3S || ki
+          -nd == FingerprintKind::JA4S)                                  
+      123 -                              ? "server" : "client";          
+      122 +            record.role = is_server_kind(kind) ? "server" : "c
+          +lient";                                                       
+      123              record.name = fields.count("client") ? fields["cli
+           ent"] : fields["server"];
+      124              record.version = fields["version"];
+      125              record.os = fields["os"];
+      126 +            record.expected_os = fields["expected_os"];       
+      127              record.category = fields["category"];
+      128              record.source = fields["source"];
+      129              record.notes = fields["notes"];
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 5 lines
+      23  
+      24  namespace {
+      25  
+      26 +inline bool is_server_kind(FingerprintKind kind) noexcept {    
+      27 +    return kind == FingerprintKind::JA3S || kind == Fingerprint
+         +Kind::JA4S ||                                                  
+      28 +           kind == FingerprintKind::JA4TS;                     
+      29 +}                                                              
+      30 +                                                               
+      31  class JsonReader {
+      32  public:
+      33      explicit JsonReader(std::string text) : text_(std::move(tex
+          t)) {}
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 1 line
+      473          "name", record.name,
+      474          "version", record.version,
+      475          "os", record.os,
+      476 +        "expected_os", record.expected_os,                    
+      477          "category", record.category,
+      478          "source", record.source,
+      479          "notes", record.notes
+
+● Update(Phase 2\engine\src\db.cpp)  ⎿  Added 1 line, removed 1 line
+      488      record.kind = kind;
+      489      record.hash = hash;
+      490      record.name = name;
+      491 -    record.role = role.empty() ? (kind == FingerprintKind::JA3
+          -S || kind == FingerprintKind::JA4S ? "server" : "client") : ro
+          -le;                                                           
+      491 +    record.role = role.empty() ? (is_server_kind(kind) ? "serv
+          +er" : "client") : role;                                       
+      492      record.category = "enrolled";
+      493      record.source = "analyst-cli";
+      494      return store(record);
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 1 line
+      530      record.name = fields["name"];
+      531      record.version = fields["version"];
+      532      record.os = fields["os"];
+      533 +    record.expected_os = fields["expected_os"];               
+      534      record.category = fields["category"];
+      535      record.source = fields["source"];
+      536      record.notes = fields["notes"];
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 2 lines
+      602          case FingerprintKind::JA3S: return "ja3s";
+      603          case FingerprintKind::JA4:  return "ja4";
+      604          case FingerprintKind::JA4S: return "ja4s";
+      605 +        case FingerprintKind::JA4T:  return "ja4t";           
+      606 +        case FingerprintKind::JA4TS: return "ja4ts";          
+      607      }
+      608      return "unknown";
+      609  }
+
+● Update(Phase 2\engine\src\db.cpp)
+  ⎿  Added 1 line
+      187          if (record.name.empty() && metadata.count("name")) rec
+           ord.name = metadata.at("name");
+      188          if (record.version.empty() && metadata.count("version"
+           )) record.version = metadata.at("version");
+      189          if (record.os.empty() && metadata.count("os")) record.
+           os = metadata.at("os");
+      190 +        if (record.expected_os.empty() && metadata.count("expe
+          +cted_os")) record.expected_os = metadata.at("expected_os");   
+      191          if (record.category.empty() && metadata.count("categor
+           y")) record.category = metadata.at("category");
+      192          if (record.notes.empty() && metadata.count("notes")) r
+           ecord.notes = metadata.at("notes");
+      193      }
+
+● Now the capture engine header: new stats counters and an option to load an
+  extra "lab" catalog.
+
+● Update(Phase 2\engine\include\tlsfp\capture.hpp)
+  ⎿  Added 1 line
+      20      std::string seed_filename{"code/db/seed_fingerprints.json"}
+          ;
+      21      std::string manifest_filename{"code/db/capture_manifest.jso
+          n"};
+      22      std::string legacy_filename{"code/python/fingerprints.json"
+          };
+      23 +    std::string extra_catalog_filename; // Optional lab catalog
+         + (same schema as seed), loaded last                            
+      24      std::string redis_host{"127.0.0.1"};
+      25      uint16_t redis_port{6379};
+      26  };
+
+● Update(Phase 2\engine\include\tlsfp\capture.hpp)
+  ⎿  Added 3 lines
+      29      uint64_t total_packets{0};
+      30      uint64_t client_hellos{0};
+      31      uint64_t server_hellos{0};
+      32 +    uint64_t tcp_syns{0};            // Client SYNs fingerprint
+         +ed (JA4T)                                                      
+      33 +    uint64_t tcp_synacks{0};         // Server SYN-ACKs fingerp
+         +rinted (JA4TS)                                                 
+      34 +    uint64_t cross_layer_alerts{0};  // Impersonation / TTL / s
+         +tack anomaly alerts raised                                     
+      35      std::chrono::steady_clock::time_point start_time;
+      36      std::chrono::steady_clock::time_point end_time;
+      37  
+
+● Next, capture.cpp. It gains a SYN table keyed by the direction-specific
+  4-tuple, the JA4T/JA4TS output lines, and the three cross-layer checks. I'll
+  start with includes and the verbose TCP printer.
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 3 lines
+       2  #include "tlsfp/parser.hpp"
+       3  #include "tlsfp/ja3.hpp"
+       4  #include "tlsfp/ja4.hpp"
+       5 +#include "tlsfp/ja4t.hpp"                                      
+       6  #include "tlsfp/db.hpp"
+       7  
+       8  #include <iostream>
+       9  #include <iomanip>
+      10  #include <cstring>
+      11 +#include <optional>                                            
+      12 +#include <unordered_map>                                       
+      13  #include <arpa/inet.h>
+      14  #include <netinet/ip.h>
+      15  #include <netinet/ip6.h>
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 36 lines
+      138                << Color::DIM << "c: [" << ja4s.raw_ja4_c << "]"
+            << Color::RESET << "\n";
+      139  }
+      140  
+      141 +void print_verbose_tcp(const TcpSynData &syn, const OsInferenc
+          +e &inf) {                                                     
+      142 +    std::cout << Color::GRAY << "   │  " << Color::RESET      
+      143 +              << Color::CYAN << "[V-TCP-Opts]    " << Color::R
+          +ESET << "[";                                                  
+      144 +    for (size_t i = 0; i < syn.option_count; ++i) {           
+      145 +        if (i > 0) std::cout << Color::GRAY << ", " << Color::
+          +RESET;                                                        
+      146 +        const char *name = tcp_option_name(syn.option_kinds[i]
+          +);                                                            
+      147 +        std::cout << Color::YELLOW;                           
+      148 +        if (name) std::cout << name;                          
+      149 +        else std::cout << static_cast<unsigned>(syn.option_kin
+          +ds[i]);                                                       
+      150 +        std::cout << Color::RESET;                            
+      151 +    }                                                         
+      152 +    std::cout << "]  " << Color::DIM << "win " << Color::RESET
+          + << syn.window_size                                           
+      153 +              << Color::DIM << "  mss " << Color::RESET       
+      154 +              << (syn.has_mss ? std::to_string(syn.mss) : std:
+          +:string("-"))                                                 
+      155 +              << Color::DIM << "  ws " << Color::RESET        
+      156 +              << (syn.has_window_scale ? std::to_string(syn.wi
+          +ndow_scale) : std::string("-")) << "\n"                       
+      157 +              << Color::GRAY << "   │  " << Color::RESET      
+      158 +              << Color::CYAN << "[V-TCP-OS]      " << Color::R
+          +ESET                                                          
+      159 +              << Color::DIM << "option layout → " << Color::RE
+          +SET << os_family_name(inf.layout_family)                      
+      160 +              << Color::DIM << ", TTL " << Color::RESET << sta
+          +tic_cast<unsigned>(syn.ip_ttl)                                
+      161 +              << Color::DIM << " (initial " << static_cast<uns
+          +igned>(inf.initial_ttl) << ") → " << Color::RESET             
+      162 +              << os_family_name(inf.ttl_family) << "\n";      
+      163 +}                                                             
+      164 +                                                              
+      165 +void print_alert(const std::string &color, const char *tag, co
+          +nst std::string &message) {                                   
+      166 +    std::cout << Color::GRAY << "   │  " << Color::RESET      
+      167 +              << color << Color::BOLD << tag << Color::RESET <
+          +< "  "                                                        
+      168 +              << color << message << Color::RESET << "\n";    
+      169 +}                                                             
+      170 +                                                              
+      171 +// A SYN or SYN-ACK held until the TLS Hello on the same direc
+          +tional 4-tuple arrives                                        
+      172 +struct SynObservation {                                       
+      173 +    TcpSynData syn;                                           
+      174 +    time_t seen{0};                                           
+      175 +};                                                            
+      176 +                                                              
+      177  } // anonymous namespace
+      178  
+      179  struct CaptureEngine::Impl {
+
+● Now the Impl state and the correlation logic:
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 137 lines
+      181      ServerHelloData server_scratchpad;
+      182      std::unique_ptr<FingerprintDatabase> db;
+      183  
+      184 +    // JA4T state: SYNs keyed client->server and SYN-ACKs keye
+          +d server->client, so each                                     
+      185 +    // is found under the same FlowKey as the ClientHello / Se
+          +rverHello it precedes.                                        
+      186 +    std::unordered_map<FlowKey, SynObservation, FlowHash> syn_
+          +table;                                                        
+      187 +    uint64_t syn_counter{0};                                  
+      188 +    // TTL of the packet currently fed to the accumulator. Its
+          + callback runs synchronously,                                 
+      189 +    // so this is the TTL of the segment that completed the He
+          +llo.                                                          
+      190 +    uint8_t current_ttl{0};                                   
+      191 +                                                              
+      192 +    void observe_syn(const FlowKey &key, const uint8_t *tcp_hd
+          +r, size_t tcp_hdr_len,                                        
+      193 +                     uint8_t ip_ttl, time_t now) {            
+      194 +        if ((++syn_counter & 0x03FF) == 0) { // Every 1024 SYN
+          +s                                                             
+      195 +            evict_stale_syns(now);                            
+      196 +        }                                                     
+      197 +        if (syn_table.size() >= SYN_TABLE_MAX_ENTRIES && syn_t
+          +able.find(key) == syn_table.end()) {                          
+      198 +            return; // Flooded with fresh SYNs: fail open, thi
+          +s flow just gets no JA4T                                      
+      199 +        }                                                     
+      200 +        SynObservation &obs = syn_table[key];                 
+      201 +        parse_tcp_syn(tcp_hdr, tcp_hdr_len, ip_ttl, obs.syn); 
+      202 +        obs.seen = now;                                       
+      203 +    }                                                         
+      204 +                                                              
+      205 +    std::optional<SynObservation> take_syn(const FlowKey &key)
+          + {                                                            
+      206 +        auto it = syn_table.find(key);                        
+      207 +        if (it == syn_table.end()) return std::nullopt;       
+      208 +        SynObservation obs = it->second;                      
+      209 +        syn_table.erase(it);                                  
+      210 +        return obs;                                           
+      211 +    }                                                         
+      212 +                                                              
+      213 +    void evict_stale_syns(time_t now) {                       
+      214 +        for (auto it = syn_table.begin(); it != syn_table.end(
+          +); ) {                                                        
+      215 +            if (now > it->second.seen && (now - it->second.see
+          +n) > SYN_TIMEOUT_SECONDS) {                                   
+      216 +                it = syn_table.erase(it);                     
+      217 +            } else {                                          
+      218 +                ++it;                                         
+      219 +            }                                                 
+      220 +        }                                                     
+      221 +    }                                                         
+      222 +                                                              
+      223 +    bool lookup(FingerprintKind kind, const std::string &hash,
+          + FingerprintRecord &record) {                                 
+      224 +        return db && db->lookup(kind, hash, record);          
+      225 +    }                                                         
+      226 +                                                              
+      227 +    /**                                                       
+      228 +     * @brief Prints the JA4T/JA4TS line and in-flow TTL check
+          + shared by both directions.                                   
+      229 +     * @return Number of alerts raised                        
+      230 +     */                                                       
+      231 +    unsigned report_tcp_fingerprint(FingerprintKind kind, cons
+          +t char *tag,                                                  
+      232 +                                    const std::optional<SynObs
+          +ervation> &obs,                                               
+      233 +                                    const char *hello_name, co
+          +nst CaptureOptions &opts) {                                   
+      234 +        std::cout << Color::GRAY << "   │  " << Color::RESET <
+          +< Color::CYAN << tag << Color::RESET;                         
+      235 +        if (!obs) {                                           
+      236 +            std::cout << Color::GRAY << "<" << (kind == Finger
+          +printKind::JA4T ? "SYN" : "SYN-ACK")                          
+      237 +                      << " not captured: connection predates c
+          +apture start>" << Color::RESET << "\n";                       
+      238 +            return 0;                                         
+      239 +        }                                                     
+      240 +                                                              
+      241 +        const TcpSynData &syn = obs->syn;                     
+      242 +        const OsInference inf = infer_os(syn);                
+      243 +        const std::string fp = compute_ja4t(syn);             
+      244 +        std::string label = resolve_label(kind, fp, opts.promp
+          +t_unknown);                                                   
+      245 +        const bool catalogued = label != "<unknown>";         
+      246 +        if (!catalogued) label = std::string("inferred: ") + o
+          +s_family_name(inf.family);                                    
+      247 +                                                              
+      248 +        std::cout << Color::BOLD << fp << Color::RESET << "  "
+      249 +                  << (catalogued ? Color::GREEN : Color::BLUE)
+          + << "[" << label << "]" << Color::RESET                       
+      250 +                  << Color::DIM << "  TTL " << static_cast<uns
+          +igned>(syn.ip_ttl)                                            
+      251 +                  << ", " << static_cast<unsigned>(inf.hops) <
+          +< " hops" << Color::RESET << "\n";                            
+      252 +                                                              
+      253 +        if (opts.verbose) print_verbose_tcp(syn, inf);        
+      254 +                                                              
+      255 +        unsigned alerts = 0;                                  
+      256 +        if (inf.stack_anomaly) {                              
+      257 +            print_alert(Color::YELLOW, "⚠ STACK_ANOMALY",     
+      258 +                        std::string("TCP options look like ") 
+          ++ os_family_name(inf.layout_family) +                         
+      259 +                        " but initial TTL " + std::to_string(i
+          +nf.initial_ttl) + " says " +                                  
+      260 +                        os_family_name(inf.ttl_family) + " (ha
+          +nd-crafted SYN or TTL rewrite)");                             
+      261 +            ++alerts;                                         
+      262 +        }                                                     
+      263 +        if (current_ttl != syn.ip_ttl) {                      
+      264 +            print_alert(Color::YELLOW, "⚠ TTL_MISMATCH",      
+      265 +                        std::string(kind == FingerprintKind::J
+          +A4T ? "SYN" : "SYN-ACK") + " arrived with TTL " +             
+      266 +                        std::to_string(syn.ip_ttl) + " but " +
+          + hello_name + " with TTL " +                                  
+      267 +                        std::to_string(current_ttl) + " (packe
+          +ts from different hosts or paths: possible injection)");      
+      268 +            ++alerts;                                         
+      269 +        }                                                     
+      270 +        return alerts;                                        
+      271 +    }                                                         
+      272 +                                                              
+      273 +    /**                                                       
+      274 +     * @brief L7 vs L4 check: does the client's kernel match t
+          +he OS its TLS stack implies?                                  
+      275 +     * Only fires for catalog records carrying expected_os (OS
+          +-bound TLS stacks such as                                     
+      276 +     * SChannel or Apple's Network.framework); cross-platform 
+          +stacks like Chrome make no claim.                             
+      277 +     * @return Number of alerts raised                        
+      278 +     */                                                       
+      279 +    unsigned report_impersonation(const std::optional<SynObser
+          +vation> &syn,                                                 
+      280 +                                  const std::string &ja3_hash,
+          + const std::string &ja4_fp,                                   
+      281 +                                  const CaptureOptions &opts) 
+          +{                                                             
+      282 +        if (!syn) return 0;                                   
+      283 +                                                              
+      284 +        FingerprintRecord tls_record;                         
+      285 +        OsFamily claimed = OsFamily::Unknown;                 
+      286 +        if ((lookup(FingerprintKind::JA4, ja4_fp, tls_record) 
+          +&& !tls_record.expected_os.empty()) ||                        
+      287 +            (lookup(FingerprintKind::JA3, ja3_hash, tls_record
+          +) && !tls_record.expected_os.empty())) {                      
+      288 +            claimed = os_family_from_label(tls_record.expected
+          +_os);                                                         
+      289 +        }                                                     
+      290 +                                                              
+      291 +        // A catalogued JA4T with an OS label beats the heuris
+          +tic                                                           
+      292 +        OsFamily actual = infer_os(syn->syn).family;          
+      293 +        FingerprintRecord tcp_record;                         
+      294 +        if (lookup(FingerprintKind::JA4T, compute_ja4t(syn->sy
+          +n), tcp_record)) {                                            
+      295 +            const OsFamily labelled = os_family_from_label(tcp
+          +_record.os);                                                  
+      296 +            if (labelled != OsFamily::Unknown) actual = labell
+          +ed;                                                           
+      297 +        }                                                     
+      298 +                                                              
+      299 +        if (claimed == OsFamily::Unknown || actual == OsFamily
+          +::Unknown) {                                                  
+      300 +            if (opts.verbose) {                               
+      301 +                std::cout << Color::GRAY << "   │  " << Color:
+          +:RESET << Color::DIM << "cross-layer: "                       
+      302 +                          << (claimed == OsFamily::Unknown    
+      303 +                                  ? "no OS claim (TLS fingerpr
+          +int has no expected_os in catalog)"                           
+      304 +                                  : "TCP/IP stack OS undetermi
+          +ned")                                                         
+      305 +                          << Color::RESET << "\n";            
+      306 +            }                                                 
+      307 +            return 0;                                         
+      308 +        }                                                     
+      309 +                                                              
+      310 +        const std::string who = tls_record.name.empty() ? std:
+          +:string("this TLS client") : tls_record.name;                 
+      311 +        if (!os_families_compatible(claimed, actual)) {       
+      312 +            print_alert(Color::RED, "✖ IMPERSONATION_MISMATCH"
+          +,                                                             
+      313 +                        "TLS says " + who + " (ships only on "
+          + + os_family_name(claimed) +                                  
+      314 +                        ") but the TCP/IP stack is " + os_fami
+          +ly_name(actual));                                             
+      315 +            return 1;                                         
+      316 +        }                                                     
+      317 +        print_alert(Color::GREEN, "✓ CROSS-LAYER OK", who + " 
+          +on " + os_family_name(actual));                               
+      318 +        return 0;                                             
+      319 +    }                                                         
+      320 +                                                              
+      321      std::string resolve_label(FingerprintKind kind, const std:
+           :string &hash, bool prompt_unknown) {
+      322          if (!db) return "<unknown>";
+      323  
+
+● Now loading the lab catalog in setup_pcap, and the SYN/TTL capture in
+  handle_packet:
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 11 lines
+      420          std::size_t loaded = impl_->db->load_seed_files(seed_p
+           ath, manifest_path) +
+      421                               impl_->db->load_legacy_ja3_file(l
+           egacy_path);
+      422          std::cout << Color::DIM << "[*] Loaded " << loaded << 
+           " fingerprint catalog records." << Color::RESET << "\n";
+      423 +                                                              
+      424 +        if (!options_.extra_catalog_filename.empty()) {       
+      425 +            std::size_t lab = impl_->db->load_seed_files(optio
+          +ns_.extra_catalog_filename);                                  
+      426 +            if (lab == 0) {                                   
+      427 +                std::cout << Color::YELLOW << "[!] No records 
+          +loaded from lab catalog "                                     
+      428 +                          << options_.extra_catalog_filename <
+          +< Color::RESET << "\n";                                       
+      429 +            } else {                                          
+      430 +                std::cout << Color::DIM << "[*] Loaded " << la
+          +b << " lab catalog records from "                             
+      431 +                          << options_.extra_catalog_filename <
+          +< Color::RESET << "\n";                                       
+      432 +            }                                                 
+      433 +        }                                                     
+      434      }
+      435  
+      436      return true;
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line
+      515      FlowKey key{};
+      516      size_t ip_hdr_len = 0;
+      517      size_t ip_total_len = 0;
+      518 +    uint8_t ip_ttl = 0; // IPv4 TTL / IPv6 Hop Limit          
+      519  
+      520      if (ethertype == 0x0800) { // IPv4
+      521          if (pkthdr->caplen < link_hdr_len + 20) return;
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line
+      529          ip_total_len = (static_cast<size_t>(ip_ptr[2]) << 8) |
+            ip_ptr[3];
+      530          if (ip_total_len < ip_hdr_len) return;
+      531  
+      532 +        ip_ttl = ip_ptr[8];                                   
+      533          key.ip_version = 4;
+      534          std::memcpy(&key.src_ip.v4.s_addr, ip_ptr + 12, 4);
+      535          std::memcpy(&key.dst_ip.v4.s_addr, ip_ptr + 16, 4);
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line
+      552          ip_hdr_len = ext_offset - link_hdr_len;
+      553          if (pkthdr->caplen < link_hdr_len + ip_hdr_len || ip_t
+           otal_len < ip_hdr_len) return;
+      554  
+      555 +        ip_ttl = ip6_ptr[7];                                  
+      556          key.ip_version = 6;
+      557          std::memcpy(&key.src_ip.v6, ip6_ptr + 8, 16);
+      558          std::memcpy(&key.dst_ip.v6, ip6_ptr + 24, 16);
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 11 lines
+      574      size_t tcp_hdr_len = static_cast<size_t>(tcp_ptr[12] >> 4)
+            * 4;
+      575      if (tcp_hdr_len < 20 || pkthdr->caplen < link_hdr_len + ip
+           _hdr_len + tcp_hdr_len) return;
+      576  
+      577 +    // JA4T / JA4TS: record the kernel-built SYN and SYN-ACK b
+          +efore the payload-less early exit                             
+      578 +    const uint8_t tcp_flags = tcp_ptr[13];                    
+      579 +    if (tcp_flags & TCP_FLAG_SYN) {                           
+      580 +        if (tcp_flags & TCP_FLAG_ACK) {                       
+      581 +            stats_.tcp_synacks++;                             
+      582 +        } else {                                              
+      583 +            stats_.tcp_syns++;                                
+      584 +        }                                                     
+      585 +        impl_->observe_syn(key, tcp_ptr, tcp_hdr_len, ip_ttl, 
+          +pkthdr->ts.tv_sec);                                           
+      586 +    }                                                         
+      587 +                                                              
+      588      size_t total_hdrs = link_hdr_len + ip_hdr_len + tcp_hdr_le
+           n;
+      589      if (pkthdr->caplen <= total_hdrs) return; // Pure ACK, SYN
+           , etc.
+      590  
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line
+      608      if (payload_len == 0) return;
+      609  
+      610      // Feed to Two-Tier Accumulator
+      611 +    impl_->current_ttl = ip_ttl;                              
+      612      accumulator_->process_segment(key, seq, payload, payload_l
+           en, pkthdr->ts.tv_sec);
+      613  }
+      614  
+
+● Finally, wiring the reports into the ClientHello and ServerHello output:
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line
+      624              stats_.client_hellos++;
+      625              JA3Fingerprint ja3 = compute_ja3(impl_->client_scr
+           atchpad);
+      626              JA4Fingerprint ja4 = compute_ja4(impl_->client_scr
+           atchpad);
+      627 +            std::optional<SynObservation> syn = impl_->take_sy
+          +n(key);                                                       
+      628  
+      629              if (options_.quiet) return;
+      630  
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 4 lines
+      655                        << Color::BOLD << ja4.full_fp << Color::
+           RESET << "  "
+      656                        << (label_ja4 != "<unknown>" ? Color::GR
+           EEN : Color::GRAY) << "[" << label_ja4 << "]" << Color::RESET 
+           << "\n";
+      657  
+      658 +            stats_.cross_layer_alerts +=                      
+      659 +                impl_->report_tcp_fingerprint(FingerprintKind:
+          +:JA4T, "JA4T: ", syn, "ClientHello", options_) +              
+      660 +                impl_->report_impersonation(syn, ja3.md5_hash,
+          + ja4.full_fp, options_);                                      
+      661 +                                                              
+      662              if (options_.verbose) {
+      663                  print_verbose_client(impl_->client_scratchpad,
+            ja3, ja4);
+      664              }
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line
+      671              stats_.server_hellos++;
+      672              JA3Fingerprint ja3s = compute_ja3s(impl_->server_s
+           cratchpad);
+      673              JA4Fingerprint ja4s = compute_ja4s(impl_->server_s
+           cratchpad);
+      674 +            std::optional<SynObservation> synack = impl_->take
+          +_syn(key);                                                    
+      675  
+      676              if (options_.quiet) return;
+      677  
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 3 lines
+      702                        << Color::BOLD << ja4s.full_fp << Color:
+           :RESET << "  "
+      703                        << (label_ja4s != "<unknown>" ? Color::G
+           REEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESE
+           T << "\n";
+      704  
+      705 +            stats_.cross_layer_alerts +=                      
+      706 +                impl_->report_tcp_fingerprint(FingerprintKind:
+          +:JA4TS, "JA4TS:", synack, "ServerHello", options_);           
+      707 +                                                              
+      708              if (options_.verbose) {
+      709                  print_verbose_server(impl_->server_scratchpad,
+            ja3s, ja4s);
+      710              }
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 1 line, removed 1 line
+      703                        << (label_ja4s != "<unknown>" ? Color::G
+           REEN : Color::GRAY) << "[" << label_ja4s << "]" << Color::RESE
+           T << "\n";
+      704  
+      705              stats_.cross_layer_alerts +=
+      706 -                impl_->report_tcp_fingerprint(FingerprintKind:
+          -:JA4TS, "JA4TS:", synack, "ServerHello", options_);           
+      706 +                impl_->report_tcp_fingerprint(FingerprintKind:
+          +:JA4TS, "JA4TS: ", synack, "ServerHello", options_);          
+      707  
+      708              if (options_.verbose) {
+      709                  print_verbose_server(impl_->server_scratchpad,
+            ja3s, ja4s);
+
+● Now main.cpp (a -c flag and the summary counters) and CMakeLists.txt:
+
+● Update(Phase 2\engine\src\main.cpp)
+  ⎿  Added 1 line
+      27                << "  -v               Enable verbose dissection 
+          of TLS handshake fields\n"
+      28                << "  -q               Quiet / benchmark mode (su
+          ppress output, measure pps)\n"
+      29                << "  -u               Interactively prompt to la
+          bel unknown fingerprints\n"
+      30 +              << "  -c <catalog>     Load an extra catalog JSON
+         + (seed schema, e.g. ja4t / expected_os lab records)\n"         
+      31                << "  -h               Show this help message and
+           exit\n";
+      32  }
+      33  
+
+● Update(Phase 2\engine\src\main.cpp)
+  ⎿  Added 1 line, removed 1 line
+      38      options.bpf_filter = "tcp";
+      39  
+      40      int opt = 0;
+      41 -    while ((opt = getopt(argc, argv, "r:i:f:vquh")) != -1) {   
+      41 +    while ((opt = getopt(argc, argv, "r:i:f:c:vquh")) != -1) { 
+      42          switch (opt) {
+      43              case 'r':
+      44                  options.read_filename = optarg;
+
+● Update(Phase 2\engine\src\main.cpp)
+  ⎿  Added 3 lines
+      49              case 'f':
+      50                  options.bpf_filter = optarg;
+      51                  break;
+      52 +            case 'c':                                          
+      53 +                options.extra_catalog_filename = optarg;       
+      54 +                break;                                         
+      55              case 'v':
+      56                  options.verbose = true;
+      57                  break;
+
+● Update(Phase 2\engine\src\main.cpp)
+  ⎿  Added 3 lines
+      105                    << "Total Packets:    " << stats.total_packe
+           ts << "\n"
+      106                    << "ClientHellos:     " << stats.client_hell
+           os << "\n"
+      107                    << "ServerHellos:     " << stats.server_hell
+           os << "\n"
+      108 +                  << "TCP SYN/SYN-ACK:  " << stats.tcp_syns <<
+          + " / " << stats.tcp_synacks << "\n"                           
+      109 +                  << "Cross-layer Alerts: " << (stats.cross_la
+          +yer_alerts ? "\033[1;31m" : "")                               
+      110 +                  << stats.cross_layer_alerts << "\033[0m\n"  
+      111                    << (is_live ? "Capture Duration: " : "Elapse
+           d Time:     ") 
+      112                    << std::fixed << std::setprecision(is_live ?
+            2 : 4) 
+      113                    << stats.elapsed_seconds() << "s\n";
+
+● Update(Phase 2\engine\CMakeLists.txt)
+  ⎿  Added 1 line
+      34      src/parser.cpp
+      35      src/ja3.cpp
+      36      src/ja4.cpp
+      37 +    src/ja4t.cpp                                               
+      38      src/db.cpp
+      39  )
+      40  
+
+● I'll also add a small unit test target that checks the FoxIO reference vectors
+  and the OS inference rules:
+
+● Write(Phase 2\engine\tests\test_ja4t.cpp)
+  ⎿  Wrote 98 lines to Phase 2\engine\tests\test_ja4t.cpp
+      1 // JA4T unit tests: FoxIO reference vectors + OS inference. Run v
+        ia `ctest` or directly.
+      2 #include "tlsfp/ja4t.hpp"
+      3
+      4 #include <cstdio>
+      5 #include <initializer_list>
+      6 #include <string>
+      7 #include <vector>
+      8
+      9 using namespace tlsfp;
+     … +89 lines (ctrl+o to expand)
+
+● Update(Phase 2\engine\CMakeLists.txt)
+  ⎿  Added 11 lines
+      75      PRIVATE
+      76          tlsfp_phase2_lib
+      77  )
+      78 +                                                               
+      79 +# Unit tests (ctest)                                           
+      80 +enable_testing()                                               
+      81 +add_executable(tlsfp_phase2_tests                              
+      82 +    tests/test_ja4t.cpp                                        
+      83 +)                                                              
+      84 +target_link_libraries(tlsfp_phase2_tests                       
+      85 +    PRIVATE                                                    
+      86 +        tlsfp_phase2_lib                                       
+      87 +)                                                              
+      88 +add_test(NAME ja4t COMMAND tlsfp_phase2_tests)                 
+
+● Building in WSL, Release and Debug. The Debug build turns on AddressSanitizer
+  and UBSan.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The Release build is clean and all 23 unit tests pass, but the Debug link
+  failure predates my changes, traced to PRIVATE sanitizer flags on a static
+  library. I'll make the one-word CMake fix so the sanitizers work for testing.
+
+● Update(Phase 2\engine\CMakeLists.txt)
+  ⎿  Added 2 lines, removed 1 line
+      61          $<$<CONFIG:Debug>:-g3>
+      62          $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+      63      )
+      64 -    target_link_options(tlsfp_phase2_lib PRIVATE               
+      64 +    # PUBLIC: executables linking this static lib need the sani
+         +tizer runtimes too                                             
+      65 +    target_link_options(tlsfp_phase2_lib PUBLIC                
+      66          $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+      67      )
+      68  endif()
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both builds pass. I'm now running the new engine over all 49 pcaps against the
+  baseline, where only the new JA4T, JA4TS, alert and summary lines may differ,
+  and the sanitizer build gets the same sweep.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Zero diffs and zero sanitizer reports. One caveat: grep treated one output as
+  binary (probably the non-ASCII ALPN pcap), which could hide a diff in that
+  file. I'll rerun with grep -a.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The regression is clean: all existing JA3/JA4/JA3S/JA4S output is
+  byte-identical across all 49 pcaps, and the sanitizers report nothing. Now the
+  new output on real captures:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● JA4T is now working on real data and has surfaced a calibration issue: all 20
+  STACK_ANOMALY alerts need review, since real CDN and load-balancer servers
+  often run Linux with tuned TTLs of 255 or 128. I'll check which direction
+  triggered them.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All 20 flagged cases are server-side SYN-ACKs from CDN front ends, not client
+  traffic, so they aren't spoofing. I'll restrict STACK_ANOMALY to client SYNs
+  and label server disagreements without alerting.
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 6 lines, removed 1 line
+      243          const std::string fp = compute_ja4t(syn);
+      244          std::string label = resolve_label(kind, fp, opts.promp
+           t_unknown);
+      245          const bool catalogued = label != "<unknown>";
+      246 -        if (!catalogued) label = std::string("inferred: ") + o
+          -s_family_name(inf.family);                                    
+      246 +        if (!catalogued && inf.stack_anomaly) {               
+      247 +            label = std::string("inferred: ") + os_family_name
+          +(inf.layout_family) + " options, TTL " +                      
+      248 +                    std::to_string(inf.initial_ttl);          
+      249 +        } else if (!catalogued) {                             
+      250 +            label = std::string("inferred: ") + os_family_name
+          +(inf.family);                                                 
+      251 +        }                                                     
+      252  
+      253          std::cout << Color::BOLD << fp << Color::RESET << "  "
+      254                    << (catalogued ? Color::GREEN : Color::BLUE)
+            << "[" << label << "]" << Color::RESET
+
+● Update(Phase 2\engine\src\capture.cpp)
+  ⎿  Added 2 lines, removed 1 line
+      258          if (opts.verbose) print_verbose_tcp(syn, inf);
+      259  
+      260          unsigned alerts = 0;
+      261 -        if (inf.stack_anomaly) {                              
+      261 +        // Client SYNs only: CDNs and load balancers routinely
+          + run Linux with TTL 128/255                                   
+      262 +        if (inf.stack_anomaly && kind == FingerprintKind::JA4T
+          +) {                                                           
+      263              print_alert(Color::YELLOW, "⚠ STACK_ANOMALY",
+      264                          std::string("TCP options look like ") 
+           + os_family_name(inf.layout_family) +
+      265                          " but initial TTL " + std::to_string(i
+           nf.initial_ttl) + " says " +
+
+● Since no current catalog records are OS-bound, no real pcap can test
+  impersonation yet. I'm checking the team's Python JA4 API first, then writing
+  a testbed script to synthesise spoofing pcaps and a matching lab catalog.
+  Ran 1 shell command (ctrl+o to expand)
+
+● The Python and C++ JA4 implementations disagree on one field, so the lab will
+  skip Python JA4 and catalog its own ClientHello by JA3 instead. With --engine,
+  it will also run the C++ engine and confirm each scenario's expected verdict.
+
+● Write(Phase 2\testbed\ja4t_lab.py)
+  ⎿  Wrote 154 lines to Phase 2\testbed\ja4t_lab.py
+       1 #!/usr/bin/env python3
+       2 """JA4T cross-layer spoofing lab (Phase 2, Track A).
+       3
+       4 Synthesises a pcap in which each TCP flow plays one spoofing sce
+         nario, plus a lab
+       5 catalog that marks the synthetic TLS client as Windows-only (exp
+         ected_os). Running
+       6 the C++ engine over both must raise exactly the expected verdict
+          per flow:
+       7
+     … +147 lines (ctrl+o to expand)
+
+● Rebuilding with the server-side calibration fix, then running the lab end to
+  end:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● All five scenarios return exactly the expected verdict. Next I'll rebuild the
+  sanitizer build and run the regression sweep, ctest, and a benchmark
+  comparison on the largest pcap to confirm SYN tracking hasn't slowed the fast
+  path.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● All checks came back clean: no regression diffs across 49 pcaps, no sanitizer
+  reports, throughput steady, and no alerts on real captures. I'm writing a
+  short design note for the team next.
+
+● Write(Phase 2\engine\JA4T.md)
+  ⎿  Wrote 62 lines to Phase 2\engine\JA4T.md
+       1 # JA4T in the Phase 2 Engine (Track A)
+       2
+       3 ## What JA4T is
+       4
+       5 JA4T (FoxIO, JA4+ family) fingerprints the **TCP SYN** a client
+         sends to open a connection. JA4TS does the same for the server's
+          **SYN-ACK**. Both use the same format:
+       6
+       7 ```
+       8 <window size>_<TCP option kinds, wire order>_<MSS>_<window scale
+     … +55 lines (~5 KB) (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● JA4T support is now in the Phase 2 C++ engine. To your question: yes, JA4T is
+  the "network layer" piece your team discussed, though the spoofing it catches
+  is impersonation (a program pretending to be a different client), not
+  IP-address spoofing. JA3/JA3S/JA4/JA4S output is byte-identical to before on
+  all 49 pcaps in code/pcaps, the new unit tests pass, and the sanitizer build
+  reports nothing. Nothing is committed yet; everything is in your working tree
+  on the JA4T branch.
+
+  What the project is
+
+  The repo has three implementations. Only one matters now:
+
+  - code/python and code/cpp are Phase 1 (the midterm). They read captured
+    traffic and compute JA3/JA4 fingerprints of the TLS handshake.
+  - Phase 2/engine is the C++ rewrite your team is building now. Phase
+    2/Phase2_team_share.md splits the remaining work into three tracks, and
+    Track A is "JA4T & Cross-Layer Impersonation Detection". So JA4T was already
+    planned; nobody had started it (the JA4T branch was identical to main).
+
+  What JA4T is
+
+  A connection happens in two stages, and each is built by a different part of
+  the computer:
+
+  1. The TCP handshake (the "SYN" packet). The operating system builds this. It
+     contains settings like the receive window size, a list of TCP options in a
+     fixed order, the maximum segment size (MSS), and the IP TTL. Every OS has
+     its own defaults: Linux and macOS start the TTL at 64, Windows at 128, and
+     each orders the options differently.
+  2. The TLS ClientHello. The application builds this. JA3/JA4 fingerprint it.
+
+  JA4T fingerprints step 1. The format is <window>_<options>_<MSS>_<window
+  scale>. Your own pcaps contain all three common stacks:
+
+  ┌────────────┬────────────────────────────────┬─────────────────────────┐
+  │   Stack    │              JA4T              │         Seen in         │
+  ├────────────┼────────────────────────────────┼─────────────────────────┤
+  │ Windows 11 │ 64240_2-1-3-1-1-4_1460_8       │ test_new.pcap (layout)  │
+  ├────────────┼────────────────────────────────┼─────────────────────────┤
+  │ Linux      │ 64240_2-4-8-1-3_1460_7         │ the client_*.pcap files │
+  ├────────────┼────────────────────────────────┼─────────────────────────┤
+  │ macOS      │ 65535_2-1-3-1-1-8-4-0-0_1460_6 │ chrome.pcap             │
+  └────────────┴────────────────────────────────┴─────────────────────────┘
+
+  How it relates to "spoofing"
+
+  A program can easily copy another client's ClientHello. curl-impersonate sends
+  Chrome's exact one, so JA4 alone can't tell them apart. Changing the SYN is
+  harder, because the kernel builds it. So if the TLS says "I'm a Windows-only
+  client" but the SYN says "Linux kernel", something is lying.
+
+  Strictly, the TCP options are layer 4 and the TTL is layer 3. The engine now
+  runs three checks:
+
+  - IMPERSONATION_MISMATCH: the TLS fingerprint implies one OS, the SYN shows
+    another.
+  - TTL_MISMATCH: the SYN and the ClientHello on the same connection arrive with
+    different TTLs. That suggests a packet was injected from a different host.
+    This is the closest thing to classic network-layer spoofing detection.
+  - STACK_ANOMALY: the SYN's option layout says one OS but its TTL says another.
+    That suggests a hand-crafted SYN.
+
+  The engine also prints a JA4TS line for the server's reply (SYN-ACK).
+
+  Two decisions you should know about
+
+  1. The impersonation check uses a new catalog field, expected_os, not the
+  existing os. Running on real data showed why. chrome.pcap matches the
+  catalog's "Chromium (os: linux)" entry, but its SYN is clearly macOS. Chrome
+  uses the same TLS code on every OS, so os only records where something was
+  captured. Comparing against it would flag real Chrome on a Mac as an attack.
+  expected_os is opt-in: set it only for TLS stacks that exist on one OS, such
+  as Windows SChannel or Apple's Safari stack.
+
+  The honest consequence for your report: curl-impersonate on Linux pretending
+  to be Chrome is undetectable this way, because real Chrome on Linux looks
+  identical. It is detectable when the impersonated client can't run on the
+  attacker's OS, e.g. a Safari or SChannel claim coming from a Linux machine.
+
+  2. STACK_ANOMALY only checks client SYNs. On server replies it fired 20 times
+  in your pcaps, all from CDNs (Cloudflare/Google style) that run Linux with a
+  tuned TTL of 128 or 255. That's normal for servers, so it would only be noise
+  there. After this change, your real captures raise 0 alerts.
+
+  What changed
+
+  - New module: ja4t.cpp (Phase%202/engine/src/ja4t.cpp) and ja4t.hpp
+    (Phase%202/engine/include/tlsfp/ja4t.hpp) parse the SYN, compute the
+    fingerprint, and guess the OS.
+  - Engine: capture.cpp (Phase%202/engine/src/capture.cpp) remembers each SYN
+    until its ClientHello arrives (memory is capped at 64K connections), prints
+    JA4T/JA4TS, and runs the checks.
+  - Catalog: db.cpp (Phase%202/engine/src/db.cpp) accepts ja4t/ja4ts sections
+    and expected_os. The Python GUI reads the same Redis records and ignores the
+    extra field.
+  - CLI: -c <catalog.json> loads an extra catalog; the run summary now counts
+    SYNs and alerts.
+  - Tests: test_ja4t.cpp (Phase%202/engine/tests/test_ja4t.cpp) has 23 unit
+    tests (run with ctest), including FoxIO's own reference values.
+  - Lab: ja4t_lab.py (Phase%202/testbed/ja4t_lab.py) generates a pcap with one
+    connection per scenario and checks the engine's verdict on each. All 5 pass.
+  - Team notes: JA4T.md (Phase%202/engine/JA4T.md) covers the format, the
+    checks, and the limits.
+  - Unrelated fix: in CMakeLists.txt (Phase%202/engine/CMakeLists.txt), the
+    Debug build never linked before (the sanitizer link flag was PRIVATE instead
+    of PUBLIC).
+
+  Things to know
+
+  - Running the lab with -c wrote one test record into your local Redis
+    (tlsfp:ja3:3d7dae6f21f71b9e304c282ad06509f8). It's harmless; delete it with
+    redis-cli DEL on that key if you like.
+  - The lab's generated files in Phase 2/testbed/generated/ are untracked.
+    Commit them or add them to .gitignore, your call.
+  - Next step for Track A: capture an OS-bound client for real, e.g. Edge or
+    PowerShell on Windows using SChannel, then replay its fingerprint with
+    curl-impersonate from WSL. Add that record with expected_os and you get a
+    live IMPERSONATION_MISMATCH demo on genuine traffic.
+
+  Sources:
+  - JA4T: TCP Fingerprinting (FoxIO blog)
+    (https://medium.com/foxio/ja4t-tcp-fingerprinting-12fb7ce9cb5a)
+  - FoxIO ja4 repository (README, Rust tcp.rs, Zeek implementation)
+    (https://github.com/FoxIO-LLC/ja4)
+  - Investigating Surfshark and NordVPN with JA4T (https://medium.com/foxio/inve
+    stigating-surfshark-and-nordvpn-with-ja4t-7bbf5a33aad0)
+  - ja4plus on PyPI (https://pypi.org/project/ja4plus/0.4.0/)
