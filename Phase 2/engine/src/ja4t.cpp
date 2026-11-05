@@ -249,29 +249,23 @@ const char *tcp_option_name(uint8_t kind) noexcept {
     }
 }
 
-std::string describe_path_mtu(bool has_mss, uint16_t mss) {
-    if (!has_mss) return "MSS absent (Path MTU undetermined)";
-    uint32_t mtu = static_cast<uint32_t>(mss) + 40; // IPv4 + TCP baseline
-    if (mss == 1460) {
-        return "MSS 1460 → Link MTU 1500 (Standard Ethernet / Wi-Fi wire)";
-    }
-    if (mss == 1452) {
-        return "MSS 1452 → Link MTU 1492 (PPPoE / DSL encapsulation)";
-    }
-    if (mss >= 1350 && mss < 1460) {
-        return "MSS " + std::to_string(mss) + " → Link MTU " + std::to_string(mtu) +
-               " (VPN / Tunnel encapsulation e.g. WireGuard/IPsec/OpenVPN or Cellular 4G/5G)";
-    }
-    if (mss > 1500) {
-        return "MSS " + std::to_string(mss) + " → Link MTU " + std::to_string(mtu) +
-               " (Jumbo Frames / Cloud VPC / Datacenter Fabric)";
-    }
-    return "MSS " + std::to_string(mss) + " → Link MTU " + std::to_string(mtu) +
-           " (Constrained MTU / Nested tunnel)";
+std::string describe_path_mtu(const TcpSynData &syn, bool server_side) {
+    if (!syn.has_mss) return "MSS absent (Path MTU undetermined)";
+    // IP + TCP fixed headers: 20 + 20 (IPv4) or 40 + 20 (IPv6)
+    const uint32_t mtu = static_cast<uint32_t>(syn.mss) + (syn.ipv6 ? 60 : 40);
+    const std::string head = "MSS " + std::to_string(syn.mss) + " → Link MTU " + std::to_string(mtu) +
+                             (syn.ipv6 ? " over IPv6" : "");
+    if (mtu == 65535 || mtu == 65536) return head + " (Loopback interface: same host)";
+    if (mtu == 1500) return head + " (Standard Ethernet / Wi-Fi)";
+    if (mtu == 1492) return head + " (PPPoE / DSL encapsulation)";
+    if (mtu > 1500)  return head + " (Jumbo frames / cloud VPC / datacenter fabric)";
+    if (server_side) return head + " (Reduced: server-side MSS clamping, common on CDNs, or a tunnel)";
+    if (mtu >= 1390) return head + " (Reduced: VPN / tunnel e.g. WireGuard, IPsec, OpenVPN, or cellular)";
+    return head + " (Constrained MTU / nested tunnel)";
 }
 
 std::string describe_network_proximity(uint8_t hops) {
-    if (hops == 0) return "Direct Link / Same Subnet (0 hops)";
+    if (hops == 0) return "Same host or same L2 segment (0 hops)";
     if (hops <= 4) return "Local Metro / Local Cloud Region (1-4 hops)";
     if (hops <= 12) return "Regional Internet Transit (5-12 hops)";
     if (hops <= 20) return "Intercontinental / Multi-AS Transit (13-20 hops)";
