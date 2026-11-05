@@ -1751,6 +1751,9 @@ void CaptureEngine::process_hello(const FlowKey &key,
                     std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
                     std::cout << "[HRR] waiting for final ServerHello; sequence analysis unsupported\n";
                 }
+                if (!impl_->workers.empty()) {
+                    dispatch_handshake(key, record_data, record_len);
+                }
                 return;
             }
             stats_.server_hellos++;
@@ -1907,8 +1910,27 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
 
             if (ctx.server_scratchpad.is_hrr) {
                 if (options_.verbose && !options_.quiet) {
+                    char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
+                    if (key.ip_version == 4) {
+                        inet_ntop(AF_INET, &key.src_ip.v4, src_ip_str, sizeof(src_ip_str));
+                        inet_ntop(AF_INET, &key.dst_ip.v4, dst_ip_str, sizeof(dst_ip_str));
+                    } else {
+                        inet_ntop(AF_INET6, &key.src_ip.v6, src_ip_str, sizeof(src_ip_str));
+                        inet_ntop(AF_INET6, &key.dst_ip.v6, dst_ip_str, sizeof(dst_ip_str));
+                    }
+                    uint16_t src_p = ntohs(key.src_port);
+                    uint16_t dst_p = ntohs(key.dst_port);
+
                     std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
+                    std::cout << "\n" << Color::SERVER_BADGE << " "
+                              << Color::BOLD << src_ip_str << ":" << src_p
+                              << Color::RESET << Color::GRAY << " ──▶ " << Color::RESET
+                              << Color::BOLD << dst_ip_str << ":" << dst_p << Color::RESET
+                              << " " << Color::YELLOW << "[HelloRetryRequest]" << Color::RESET << "\n";
                     print_pqtls_server(ctx.server_scratchpad, posture);
+                    if (!options_.interface_name.empty()) {
+                        std::cout << std::flush;
+                    }
                 }
                 return;
             }
