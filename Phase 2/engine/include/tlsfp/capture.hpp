@@ -36,8 +36,7 @@ struct CaptureStats {
     std::atomic<uint64_t> total_packets{0};
     std::atomic<uint64_t> client_hellos{0};
     std::atomic<uint64_t> server_hellos{0};
-    std::atomic<uint64_t> dropped_handshakes{0};
-    std::atomic<uint64_t> queue_overflows{0};
+    std::atomic<uint64_t> dropped_packets{0};
     std::atomic<uint64_t> tcp_syns{0};            // Client SYNs fingerprinted (JA4T)
     std::atomic<uint64_t> tcp_synacks{0};         // Server SYN-ACKs fingerprinted (JA4TS)
     std::atomic<uint64_t> cross_layer_alerts{0};  // Impersonation / TTL / stack anomaly alerts raised

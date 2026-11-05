@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -211,16 +210,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] T *front() noexcept {
-        const size_t tail = tail_.load(std::memory_order_relaxed);
-        return tail == head_.load(std::memory_order_acquire) ? nullptr : &slots_[tail];
-    }
-
-    void pop() noexcept {
-        const size_t tail = tail_.load(std::memory_order_relaxed);
-        tail_.store((tail + 1) % Capacity, std::memory_order_release);
-    }
-
     [[nodiscard]] bool empty() const noexcept {
         return tail_.load(std::memory_order_acquire) ==
                head_.load(std::memory_order_acquire);
@@ -259,8 +248,6 @@ struct WorkerContext {
     SPSCQueue<HandshakeJob, 2048> queue;
     ClientHelloData client_scratchpad;
     ServerHelloData server_scratchpad;
-    std::mutex queue_mutex;
-    std::condition_variable queue_cv;
     std::thread thread;
 };
 
@@ -268,7 +255,6 @@ struct CaptureEngine::Impl {
     std::vector<std::unique_ptr<WorkerContext>> workers;
     std::atomic<bool> running{false};
     std::mutex stdout_mutex;
-    std::mutex db_mutex;
     std::mutex enroll_mutex;
     std::unique_ptr<FingerprintDatabase> db;
 
@@ -327,7 +313,6 @@ struct CaptureEngine::Impl {
     }
 
     bool lookup(FingerprintKind kind, const std::string &hash, FingerprintRecord &record) {
-        std::lock_guard<std::mutex> lock(db_mutex);
         return db && db->lookup(kind, hash, record);
     }
 
@@ -426,7 +411,7 @@ struct CaptureEngine::Impl {
         if (!db) return "<unknown>";
 
         FingerprintRecord record;
-        if (lookup(kind, hash, record)) {
+        if (db->lookup(kind, hash, record)) {
             if (record.name.empty()) return "<unnamed>";
             if (record.category.empty()) return record.name;
             return record.name + " (" + record.category + ")";
@@ -434,7 +419,7 @@ struct CaptureEngine::Impl {
 
         if (prompt_unknown) {
             std::lock_guard<std::mutex> enroll_lock(enroll_mutex);
-            if (lookup(kind, hash, record)) {
+            if (db->lookup(kind, hash, record)) {
                 if (record.name.empty()) return "<unnamed>";
                 if (record.category.empty()) return record.name;
                 return record.name + " (" + record.category + ")";
@@ -445,8 +430,7 @@ struct CaptureEngine::Impl {
                       << ". Enter verified client/server name (empty to skip): " << std::flush;
             std::string name;
             if (std::getline(std::cin, name) && !name.empty()) {
-                std::lock_guard<std::mutex> db_lock(db_mutex);
-                if (db && db->enroll(kind, hash, name)) {
+                if (db->enroll(kind, hash, name)) {
                     return name + " (enrolled)";
                 }
             }
@@ -502,34 +486,24 @@ void CaptureEngine::dispatch_handshake(const FlowKey &key, const uint8_t *record
         std::memcpy(job.record_data, record, len);
     };
 
-    bool pushed = false;
-    {
-        std::unique_lock<std::mutex> queue_lock(worker.queue_mutex);
-        pushed = worker.queue.emplace(init_job);
-        if (pushed) {
-            queue_lock.unlock();
-            worker.queue_cv.notify_one();
-        }
-    }
+    bool pushed = worker.queue.emplace(init_job);
 
     if (!pushed) {
         if (!options_.read_filename.empty()) {
-            std::unique_lock<std::mutex> queue_lock(worker.queue_mutex);
-            while (!stop_requested_.load(std::memory_order_acquire)) {
+            while (!stop_requested_.load(std::memory_order_relaxed)) {
+                #if defined(__x86_64__) || defined(_M_X64)
+                _mm_pause();
+                #else
+                std::this_thread::yield();
+                #endif
                 if (worker.queue.emplace(init_job)) {
                     pushed = true;
                     break;
                 }
-                worker.queue_cv.wait_for(queue_lock, std::chrono::milliseconds(1));
-            }
-            if (pushed) {
-                queue_lock.unlock();
-                worker.queue_cv.notify_one();
             }
         }
         if (!pushed) {
-            stats_.queue_overflows.fetch_add(1, std::memory_order_relaxed);
-            stats_.dropped_handshakes.fetch_add(1, std::memory_order_relaxed);
+            stats_.dropped_packets.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
@@ -616,25 +590,19 @@ bool CaptureEngine::setup_pcap() {
     for (auto &ctx : impl_->workers) {
         WorkerContext *ctx_ptr = ctx.get();
         ctx->thread = std::thread([this, ctx_ptr] {
-            while (true) {
-                std::unique_lock<std::mutex> queue_lock(ctx_ptr->queue_mutex);
-                ctx_ptr->queue_cv.wait_for(queue_lock, std::chrono::milliseconds(1), [this, ctx_ptr] {
-                    return !ctx_ptr->queue.empty() ||
-                           !impl_->running.load(std::memory_order_acquire);
+            while (impl_->running.load(std::memory_order_acquire) || !ctx_ptr->queue.empty()) {
+                bool processed = ctx_ptr->queue.pop_into([this, ctx_ptr](const HandshakeJob &job) {
+                    process_assembled_handshake(*ctx_ptr, job);
                 });
-
-                if (ctx_ptr->queue.empty() &&
-                    !impl_->running.load(std::memory_order_acquire)) {
-                    break;
+                if (!processed) {
+                    for (int spin = 0; spin < 32; ++spin) {
+                        #if defined(__x86_64__) || defined(_M_X64)
+                        _mm_pause();
+                        #endif
+                    }
+                    if (!ctx_ptr->queue.empty()) continue;
+                    std::this_thread::yield();
                 }
-
-                HandshakeJob *job = ctx_ptr->queue.front();
-                queue_lock.unlock();
-                process_assembled_handshake(*ctx_ptr, *job);
-                queue_lock.lock();
-                ctx_ptr->queue.pop();
-                queue_lock.unlock();
-                ctx_ptr->queue_cv.notify_one();
             }
         });
     }
@@ -649,35 +617,24 @@ static void global_pcap_callback(u_char *user, const struct pcap_pkthdr *h, cons
 
 void CaptureEngine::stop() noexcept {
     stop_requested_.store(true, std::memory_order_release);
-    if (impl_) {
-        impl_->running.store(false, std::memory_order_release);
-    }
+    if (impl_) impl_->running.store(false, std::memory_order_release);
+    if (pcap_handle_) pcap_breakloop(pcap_handle_);
 }
 
 bool CaptureEngine::run() {
     if (!setup_pcap()) return false;
     stats_.start_time = std::chrono::steady_clock::now();
 
-    int ret = 0;
-    while (!stop_requested_.load(std::memory_order_acquire)) {
-        ret = pcap_dispatch(pcap_handle_, 64, global_pcap_callback,
-                            reinterpret_cast<u_char*>(this));
-        if (ret < 0) break;
-        if (ret == 0 && !options_.interface_name.empty()) continue;
-        if (ret == 0) break;
-    }
+    int ret = pcap_loop(pcap_handle_, 0, global_pcap_callback, reinterpret_cast<u_char*>(this));
 
     impl_->running.store(false, std::memory_order_release);
-    for (auto &worker : impl_->workers) {
-        worker->queue_cv.notify_all();
-    }
     for (auto &worker : impl_->workers) {
         if (worker->thread.joinable()) worker->thread.join();
     }
     stats_.end_time = std::chrono::steady_clock::now();
 
-    if (ret < 0 && !stop_requested_.load(std::memory_order_acquire)) {
-        std::cerr << Color::RED << "[!] pcap_dispatch error: " << pcap_geterr(pcap_handle_) << Color::RESET << "\n";
+    if (ret < 0 && ret != -2) { // -2 is expected break from pcap_breakloop
+        std::cerr << Color::RED << "[!] pcap_loop error: " << pcap_geterr(pcap_handle_) << Color::RESET << "\n";
         return false;
     }
     return true;
@@ -887,10 +844,10 @@ void CaptureEngine::process_assembled_handshake(WorkerContext &ctx,
             uint16_t src_p = ntohs(key.src_port);
             uint16_t dst_p = ntohs(key.dst_port);
 
+            std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
             std::string label_ja3 = impl_->resolve_label(FingerprintKind::JA3, ja3.md5_hash, options_.prompt_unknown);
             std::string label_ja4 = impl_->resolve_label(FingerprintKind::JA4, ja4.full_fp, options_.prompt_unknown);
 
-            std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
             std::cout << "\n" << Color::CLIENT_BADGE << " "
                       << Color::BOLD << src_ip_str << ":" << src_p
                       << Color::RESET << Color::GRAY << " ──▶ " << Color::RESET
@@ -938,10 +895,10 @@ void CaptureEngine::process_assembled_handshake(WorkerContext &ctx,
             uint16_t src_p = ntohs(key.src_port);
             uint16_t dst_p = ntohs(key.dst_port);
 
+            std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
             std::string label_ja3s = impl_->resolve_label(FingerprintKind::JA3S, ja3s.md5_hash, options_.prompt_unknown);
             std::string label_ja4s = impl_->resolve_label(FingerprintKind::JA4S, ja4s.full_fp, options_.prompt_unknown);
 
-            std::lock_guard<std::mutex> lock(impl_->stdout_mutex);
             std::cout << "\n" << Color::SERVER_BADGE << " "
                       << Color::BOLD << src_ip_str << ":" << src_p
                       << Color::RESET << Color::GRAY << " ──▶ " << Color::RESET

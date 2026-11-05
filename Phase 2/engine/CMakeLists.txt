@@ -120,13 +120,5 @@ target_link_libraries(unit_tests
         GTest::gtest
         GTest::gtest_main
 )
-
-# GoogleTest may be provided as shared libraries (for example by Conda on
-# macOS). Make those libraries discoverable when CMake runs the test binary
-# during gtest_discover_tests().
-set_property(TARGET unit_tests APPEND PROPERTY
-    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest_main>"
-)
-
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
