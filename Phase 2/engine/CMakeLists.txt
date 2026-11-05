@@ -107,16 +107,23 @@ target_link_libraries(tlsfp_phase2_tests
 add_test(NAME ja4t COMMAND tlsfp_phase2_tests)
 
 # 2. GoogleTest-based unit tests
-find_package(GTest QUIET)
-if(NOT GTest_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
+# Always build GoogleTest from source via FetchContent as static libraries.
+# This eliminates macOS dyld @rpath errors, Conda/Homebrew shared dylib conflicts,
+# and SIP stripping DYLD_LIBRARY_PATH during test execution.
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+if(NOT TARGET GTest::gtest)
     add_library(GTest::gtest ALIAS gtest)
+endif()
+if(NOT TARGET GTest::gtest_main)
     add_library(GTest::gtest_main ALIAS gtest_main)
 endif()
 
@@ -130,17 +137,7 @@ target_link_libraries(unit_tests
         GTest::gtest_main
 )
 
-if(APPLE)
-    set_target_properties(unit_tests PROPERTIES
-        BUILD_RPATH "/opt/homebrew/lib;/usr/local/lib"
-        INSTALL_RPATH_USE_LINK_PATH TRUE
-        MACOSX_RPATH TRUE
-    )
-endif()
-
 include(GoogleTest)
 gtest_discover_tests(unit_tests
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES
-        ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib"
 )
