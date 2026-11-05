@@ -8,6 +8,7 @@
 #include <mutex>
 #include <array>
 #include <vector>
+#include <list>
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 #endif
@@ -442,6 +443,7 @@ struct Connection {
     FlowKey key;
     uint64_t id{0}, first_us{0}, last_us{0}, recency{0};
     double idle_at{0};
+    std::list<FlowKey>::iterator lru_it;
     std::optional<bool> client_at_a;
     std::optional<uint32_t> syn_seq[2];
     bool tls_candidate{false}, emitted{false}, closed{false}, hrr_seen{false}, role_conflict{false};
@@ -661,6 +663,7 @@ struct CaptureEngine::Impl {
     ~Impl() { if (json_fd >= 0) close(json_fd); }
     const CaptureOptions &options;
     std::unordered_map<FlowKey, Connection, FlowHash> connections;
+    std::list<FlowKey> lru_order;
     std::string capture_id;
     uint64_t next_id{0}, recency{0}, watermark_us{0};
     double now{0}, next_sweep{-1};
@@ -679,45 +682,47 @@ struct CaptureEngine::Impl {
         // completed. Real-versus-GREASE stays unknown; ordinary ECH acceptance
         // confirmation needs inner-handshake information absent at this tap.
         const bool non_acceptance = non_acceptance_observed(connection);
-        const bool complete = !connection.role_conflict && !connection.unexpected_client_hello && connection.client && connection.server &&
-            connection.client->status == ParseStatus::Complete && connection.server->status == ParseStatus::Complete;
-        std::string output = "{\"schema_version\":1,\"capture_id\":" + json_string(capture_id) +
-            ",\"connection_id\":" + std::to_string(connection.id) + ",\"capture_source\":" +
-            json_string(options.read_filename.empty() ? options.interface_name : options.read_filename) +
-            ",\"ip_version\":" + std::to_string(connection.key.ip_version) +
-            ",\"endpoint_a\":" + endpoint_json(connection.key, true) +
-            ",\"endpoint_b\":" + endpoint_json(connection.key, false) + ",\"client_endpoint\":" +
-            (!connection.client_at_a ? "null" : json_string(*connection.client_at_a ? "a" : "b")) +
-            ",\"first_observation_us\":" + std::to_string(connection.first_us) +
-            ",\"last_observation_us\":" + std::to_string(connection.last_us) +
-            ",\"completion_reason\":" + json_string(reason) + ",\"complete_hello_pair\":" + (complete ? "true" : "false") +
-            ",\"client\":" + client_json(connection) + ",\"server\":" + server_json(connection) +
-            ",\"interpretation\":{\"offer_type\":\"unknown\",\"acceptance\":" +
-            json_string(non_acceptance ? "non_acceptance_observed" : "unverified") +
-            ",\"evidence\":" + (non_acceptance ? "[\"I3_negotiated_below_tls13\"]" : "[]") + "},\"limitations\":[";
-        bool comma = false;
-        const auto add_limit = [&](const std::string &limit) {
-            if (comma) output += ',';
-            comma = true; output += json_string(limit);
-        };
-        if (connection.hrr_seen) add_limit("hrr_sequence_not_analyzed");
-        if (connection.role_conflict) add_limit("conflicting_endpoint_roles");
-        if (connection.unexpected_client_hello) add_limit("unexpected_additional_client_hello");
-        output += "],\"transport\":[";
-        for (int direction = 0; direction < 2; ++direction) {
-            if (direction) output += ',';
-            output += "{\"endpoint\":" + json_string(direction ? "b" : "a") +
-                ",\"status\":" + json_string(parse_status_name(connection.direction_status[direction])) + ",\"issues\":[";
-            for (size_t i = 0; i < connection.issues[direction].size(); ++i) {
-                if (i) output += ',';
-                const auto &issue = connection.issues[direction][i];
-                output += "{\"status\":" + json_string(parse_status_name(issue.status)) +
-                    ",\"reason\":" + json_string(issue.reason) + "}";
-            }
-            output += "]}";
-        }
-        output += "]}\n";
+
         if (!failed && json_fd >= 0) {
+            const bool complete = !connection.role_conflict && !connection.unexpected_client_hello && connection.client && connection.server &&
+                connection.client->status == ParseStatus::Complete && connection.server->status == ParseStatus::Complete;
+            std::string output = "{\"schema_version\":1,\"capture_id\":" + json_string(capture_id) +
+                ",\"connection_id\":" + std::to_string(connection.id) + ",\"capture_source\":" +
+                json_string(options.read_filename.empty() ? options.interface_name : options.read_filename) +
+                ",\"ip_version\":" + std::to_string(connection.key.ip_version) +
+                ",\"endpoint_a\":" + endpoint_json(connection.key, true) +
+                ",\"endpoint_b\":" + endpoint_json(connection.key, false) + ",\"client_endpoint\":" +
+                (!connection.client_at_a ? "null" : json_string(*connection.client_at_a ? "a" : "b")) +
+                ",\"first_observation_us\":" + std::to_string(connection.first_us) +
+                ",\"last_observation_us\":" + std::to_string(connection.last_us) +
+                ",\"completion_reason\":" + json_string(reason) + ",\"complete_hello_pair\":" + (complete ? "true" : "false") +
+                ",\"client\":" + client_json(connection) + ",\"server\":" + server_json(connection) +
+                ",\"interpretation\":{\"offer_type\":\"unknown\",\"acceptance\":" +
+                json_string(non_acceptance ? "non_acceptance_observed" : "unverified") +
+                ",\"evidence\":" + (non_acceptance ? "[\"I3_negotiated_below_tls13\"]" : "[]") + "},\"limitations\":[";
+            bool comma = false;
+            const auto add_limit = [&](const std::string &limit) {
+                if (comma) output += ',';
+                comma = true; output += json_string(limit);
+            };
+            if (connection.hrr_seen) add_limit("hrr_sequence_not_analyzed");
+            if (connection.role_conflict) add_limit("conflicting_endpoint_roles");
+            if (connection.unexpected_client_hello) add_limit("unexpected_additional_client_hello");
+            output += "],\"transport\":[";
+            for (int direction = 0; direction < 2; ++direction) {
+                if (direction) output += ',';
+                output += "{\"endpoint\":" + json_string(direction ? "b" : "a") +
+                    ",\"status\":" + json_string(parse_status_name(connection.direction_status[direction])) + ",\"issues\":[";
+                for (size_t i = 0; i < connection.issues[direction].size(); ++i) {
+                    if (i) output += ',';
+                    const auto &issue = connection.issues[direction][i];
+                    output += "{\"status\":" + json_string(parse_status_name(issue.status)) +
+                        ",\"reason\":" + json_string(issue.reason) + "}";
+                }
+                output += "]}";
+            }
+            output += "]}\n";
+
             size_t offset = 0;
             while (offset < output.size()) {
                 const auto count = write(json_fd, output.data() + offset, output.size() - offset);
@@ -1286,6 +1291,7 @@ void CaptureEngine::maintenance() {
             impl_->emit(it->second, "timeout");
             accumulator_->forget_flow(it->first);
             accumulator_->forget_flow(reverse_flow(it->first));
+            impl_->lru_order.erase(it->second.lru_it);
             it = impl_->connections.erase(it);
         } else ++it;
     }
@@ -1304,6 +1310,7 @@ bool CaptureEngine::finish_capture(const char *reason) {
         accumulator_->forget_flow(reverse_flow(connection->key));
     }
     impl_->connections.clear();
+    impl_->lru_order.clear();
     return !impl_->failed;
 }
 
@@ -1356,6 +1363,7 @@ void CaptureEngine::ingest_tcp_segment(const FlowKey &key, uint32_t seq, uint8_t
         accumulator_->invalidate_flow(reverse_flow(canonical), "connection_replaced", true);
         impl_->emit(it->second, "connection_replaced");
         accumulator_->forget_flow(canonical); accumulator_->forget_flow(reverse_flow(canonical));
+        impl_->lru_order.erase(it->second.lru_it);
         impl_->connections.erase(it);
         it = impl_->connections.end();
     }
@@ -1365,25 +1373,29 @@ void CaptureEngine::ingest_tcp_segment(const FlowKey &key, uint32_t seq, uint8_t
         if (impl_->connections.size() >= options_.max_connections) {
             // Bound all retained generations, including SYN hints and completion
             // markers. Evict by observation recency and summarize any TLS candidate.
-            auto oldest = std::min_element(impl_->connections.begin(), impl_->connections.end(),
-                [](const auto &a, const auto &b) { return a.second.recency < b.second.recency; });
+            if (impl_->lru_order.empty()) return;
+            FlowKey oldest_key = impl_->lru_order.back();
+            auto oldest = impl_->connections.find(oldest_key);
             if (oldest == impl_->connections.end()) return;
             accumulator_->invalidate_flow(oldest->first, "capacity_limit", true);
             accumulator_->invalidate_flow(reverse_flow(oldest->first), "capacity_limit", true);
             impl_->emit(oldest->second, "capacity_limit");
             accumulator_->forget_flow(oldest->first); accumulator_->forget_flow(reverse_flow(oldest->first));
+            impl_->lru_order.pop_back();
             impl_->connections.erase(oldest);
         }
         Connection connection;
         connection.key = canonical;
         connection.id = ++impl_->next_id;
         connection.first_us = timestamp_us;
+        connection.lru_it = impl_->lru_order.insert(impl_->lru_order.begin(), canonical);
         it = impl_->connections.emplace(canonical, std::move(connection)).first;
     }
     auto &connection = it->second;
     connection.last_us = std::max(connection.last_us, timestamp_us);
     connection.idle_at = impl_->now;
     connection.recency = ++impl_->recency;
+    impl_->lru_order.splice(impl_->lru_order.begin(), impl_->lru_order, connection.lru_it);
     if (initial_syn) connection.orient(direction == 0);
     if ((flags & TH_SYN) && !connection.syn_seq[direction]) {
         connection.syn_seq[direction] = seq;
@@ -1498,8 +1510,11 @@ void CaptureEngine::process_hello(const FlowKey &key,
                         connection.hrr_seen ? HelloRole::AfterHrr :
                         (connection.syn_seq[direction] ? HelloRole::Initial : HelloRole::Unknown));
             stats_.client_hellos++;
-            JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
-            JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
+            std::string ja3_str, ja4_str;
+            if (impl_->json_fd >= 0) {
+                ja3_str = compute_ja3(impl_->client_scratchpad).md5_hash;
+                ja4_str = compute_ja4(impl_->client_scratchpad).full_fp;
+            }
             if (connection.client && !connection.hrr_seen) connection.unexpected_client_hello = true;
             if (!connection.client) {
                 // CH1 is the baseline across retries. Copy only visible outer
@@ -1508,7 +1523,9 @@ void CaptureEngine::process_hello(const FlowKey &key,
                 observation.status = client.parse_status; observation.detail = client.parse_detail;
                 observation.random = random_hex(client.outer_random);
                 observation.sni = std::string(client.sni); observation.alpn = std::string(client.first_alpn);
-                observation.ech = client.ech; observation.ja3 = ja3.md5_hash; observation.ja4 = ja4.full_fp;
+                observation.ech = client.ech;
+                observation.ja3 = std::move(ja3_str);
+                observation.ja4 = std::move(ja4_str);
                 connection.client = std::move(observation);
                 connection.tls13_offered = std::find(client.supported_versions.begin(), client.supported_versions.end(), 0x0304)
                     != client.supported_versions.end();
@@ -1521,6 +1538,9 @@ void CaptureEngine::process_hello(const FlowKey &key,
                 return;
             }
             if (options_.quiet) return;
+
+            JA3Fingerprint ja3 = compute_ja3(impl_->client_scratchpad);
+            JA4Fingerprint ja4 = compute_ja4(impl_->client_scratchpad);
 
             char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
             if (key.ip_version == 4) {
@@ -1586,12 +1606,15 @@ void CaptureEngine::process_hello(const FlowKey &key,
                 return;
             }
             stats_.server_hellos++;
-            JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
-            JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
+            std::string ja3s_str, ja4s_str;
+            if (impl_->json_fd >= 0) {
+                ja3s_str = compute_ja3s(impl_->server_scratchpad).md5_hash;
+                ja4s_str = compute_ja4s(impl_->server_scratchpad).full_fp;
+            }
             ServerObservation observation;
             observation.status = server.parse_status; observation.detail = server.parse_detail;
             observation.version = server.selected_version;
-            observation.ja3s = ja3s.md5_hash; observation.ja4s = ja4s.full_fp;
+            observation.ja3s = std::move(ja3s_str); observation.ja4s = std::move(ja4s_str);
             connection.server = std::move(observation);
             // The initial-response study ends at the final ServerHello. Later
             // encrypted handshake/application traffic is outside this summary.
@@ -1602,6 +1625,9 @@ void CaptureEngine::process_hello(const FlowKey &key,
                 return;
             }
             if (options_.quiet) return;
+
+            JA3Fingerprint ja3s = compute_ja3s(impl_->server_scratchpad);
+            JA4Fingerprint ja4s = compute_ja4s(impl_->server_scratchpad);
 
             char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
             if (key.ip_version == 4) {
@@ -1664,6 +1690,7 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
     if (hs_type == TLS_HANDSHAKE_CLIENT_HELLO) {
         if (parse_client_hello(record_data, record_len, ctx.client_scratchpad)) {
             analyze_ech(ctx.client_scratchpad.ech, job.hello_role);
+            if (options_.quiet && !options_.enable_ja4t) return;
             JA3Fingerprint ja3 = compute_ja3(ctx.client_scratchpad);
             JA4Fingerprint ja4 = compute_ja4(ctx.client_scratchpad);
 
@@ -1715,6 +1742,7 @@ void CaptureEngine::process_worker_hello(WorkerContext &ctx,
     } else if (hs_type == TLS_HANDSHAKE_SERVER_HELLO) {
         if (parse_server_hello(record_data, record_len, ctx.server_scratchpad)) {
             if (ctx.server_scratchpad.is_hrr) return;
+            if (options_.quiet && !options_.enable_ja4t) return;
             JA3Fingerprint ja3s = compute_ja3s(ctx.server_scratchpad);
             JA4Fingerprint ja4s = compute_ja4s(ctx.server_scratchpad);
 
