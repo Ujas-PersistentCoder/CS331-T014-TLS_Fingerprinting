@@ -81,6 +81,10 @@ int main() {
     check(bad_mss.malformed_options && !bad_mss.has_mss && bad_mss.has_window_scale,
           "Wrong MSS length: flagged, value ignored, walk continues");
 
+    TcpSynData bad_scale = parse(tcp_header(1024, {1, 3, 3, 15}), 64);
+    check(bad_scale.malformed_options && bad_scale.window_scale == 15,
+          "Window scale > 14 (RFC 7323): flagged as malformed options");
+
     check(!parse(tcp_header(64240, WINDOWS_OPTS), 128).malformed_options, "Stock Windows SYN is not malformed");
     check(!parse(tcp_header(65535, MACOS_OPTS), 64).malformed_options, "Stock macOS SYN (EOL padded) is not malformed");
 
@@ -132,6 +136,13 @@ int main() {
     check(os_families_compatible(OsFamily::UnixLike, OsFamily::Apple), "Unix-like ~ macOS");
     check(!os_families_compatible(OsFamily::Windows, OsFamily::Linux), "Windows !~ Linux");
     check(!os_families_compatible(OsFamily::Unknown, OsFamily::Unknown), "Unknown is never comparable");
+
+    // --- Path MTU & Network Proximity ---
+    check(describe_path_mtu(true, 1460).find("1500") != std::string::npos, "MSS 1460 -> MTU 1500");
+    check(describe_path_mtu(true, 1380).find("VPN") != std::string::npos, "MSS 1380 -> VPN/Tunnel");
+    check(describe_path_mtu(false, 0).find("undetermined") != std::string::npos, "MSS absent -> undetermined");
+    check(describe_network_proximity(0).find("Direct Link") != std::string::npos, "0 hops -> Direct Link");
+    check(describe_network_proximity(8).find("Regional") != std::string::npos, "8 hops -> Regional Transit");
 
     std::printf("\n%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
