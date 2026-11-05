@@ -122,3 +122,4 @@ ctest --test-dir "Phase 2/code/engine/build" --output-on-failure
 ## 📑 AI Usage Disclosure
 
 In compliance with course policies, artificial intelligence assistants (Claude, Gemini, ChatGPT) were utilized for code scaffolding, documentation drafting, test case ideation, and debugging support. All generated code and design formulations were thoroughly reviewed, manually verified, and grounded against RFC specifications and authoritative test vectors (Salesforce JA3 reference captures, FoxIO JA4 specifications, and RFC 10024 Post-Quantum key exchange definitions). Detailed interaction logs and transcripts are preserved inside `Phase 1/AI_Used/` and `Phase 2/AI_Used/`.
+
