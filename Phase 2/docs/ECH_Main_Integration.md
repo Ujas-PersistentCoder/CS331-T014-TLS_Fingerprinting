@@ -1,7 +1,7 @@
 # ECH integration with main — November 5, 2026
 
 This integrates the local reduced checkpoint 3 experiment, remote ECH through
-`8048488`, and main through `fa6560e`. The checkpoint commits remain in history.
+`8048488`, and main through `e3f9aba` (engine code through `fa6560e`). The checkpoint commits remain in history.
 
 ## Ownership and concurrency
 
