@@ -18,16 +18,18 @@ inline void append_padded2(std::string &out, unsigned val) {
  * timestamps follows tcp_options_write() (MSS, NOP-NOP-SACK_PERM, NOP-WS).
  */
 struct LayoutSignature {
-    std::array<uint8_t, 8> kinds;
+    std::array<uint8_t, 10> kinds;
     uint8_t count;
     OsFamily family;
 };
 
 constexpr LayoutSignature KNOWN_LAYOUTS[] = {
-    {{2, 4, 8, 1, 3},       5, OsFamily::Linux},   // Linux / Android (timestamps on, default)
-    {{2, 1, 1, 4, 1, 3},    6, OsFamily::Linux},   // Linux with net.ipv4.tcp_timestamps=0
-    {{2, 1, 3, 1, 1, 8, 4}, 7, OsFamily::Apple},   // macOS / iOS (followed by 2x EOL)
-    {{2, 1, 3, 1, 1, 4},    6, OsFamily::Windows}, // Windows 10 / 11 (timestamps off)
+    {{2, 4, 8, 1, 3},             5, OsFamily::Linux},    // Linux / Android (timestamps on, default)
+    {{2, 1, 1, 4, 1, 3},          6, OsFamily::Linux},    // Linux with net.ipv4.tcp_timestamps=0
+    {{2, 1, 3, 1, 1, 8, 4},       7, OsFamily::Apple},    // macOS / iOS (followed by 2x EOL)
+    {{2, 1, 3, 1, 1, 4},          6, OsFamily::Windows},  // Windows 10 / 11 (timestamps off, default)
+    {{2, 1, 3, 1, 1, 8, 1, 1, 4}, 9, OsFamily::Windows},  // Windows with RFC 1323 timestamps on
+    {{2, 1, 3, 4, 8},             5, OsFamily::UnixLike}, // FreeBSD / OpenBSD default
 };
 
 OsFamily classify_layout(const TcpSynData &syn) noexcept {
@@ -82,8 +84,11 @@ bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, T
         // FoxIO's reference output (macOS SYN: 65535_2-1-3-1-1-8-4-0-0_1460_6).
         if (kind == TCP_OPT_EOL) {
             ++i;
-            while (i < opts_len) {
-                if (opts[i] != TCP_OPT_EOL || parsed.option_count >= TCP_MAX_OPTIONS_LEN) return false;
+            while (i < opts_len && parsed.option_count < TCP_MAX_OPTIONS_LEN) {
+                if (opts[i] != TCP_OPT_EOL) {
+                    parsed.malformed_options = true;
+                    break;
+                }
                 parsed.option_kinds[parsed.option_count++] = TCP_OPT_EOL;
                 ++i;
             }
@@ -94,15 +99,23 @@ bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, T
             continue;
         }
 
-        if (i + 1 >= opts_len) return false;
+        // Bad TLV: keep the kind already recorded and stop walking. Rejecting the whole SYN
+        // would let a hand-crafted SYN suppress JA4T and every cross-layer check.
+        if (i + 1 >= opts_len) {
+            parsed.malformed_options = true;
+            break;
+        }
         const uint8_t len = opts[i + 1];
-        if (len < 2 || len > opts_len - i) return false;
+        if (len < 2 || len > opts_len - i) {
+            parsed.malformed_options = true;
+            break;
+        }
 
         if ((kind == TCP_OPT_MSS && len != 4) ||
             (kind == TCP_OPT_WINDOW_SCALE && len != 3) ||
-            (kind == 4 && len != 2) ||
-            (kind == 8 && len != 10)) {
-            return false;
+            (kind == TCP_OPT_SACK_PERM && len != 2) ||
+            (kind == TCP_OPT_TIMESTAMP && len != 10)) {
+            parsed.malformed_options = true; // Self-consistent length, so the walk can continue
         }
 
         if (kind == TCP_OPT_MSS && len == 4) {
@@ -111,6 +124,9 @@ bool parse_tcp_syn(const uint8_t *tcp_hdr, size_t tcp_hdr_len, uint8_t ip_ttl, T
         } else if (kind == TCP_OPT_WINDOW_SCALE && len == 3) {
             parsed.has_window_scale = true;
             parsed.window_scale = opts[i + 2];
+            if (parsed.window_scale > 14) {
+                parsed.malformed_options = true; // RFC 7323: window scale shift > 14 is invalid
+            }
         }
         i += len;
     }
@@ -163,7 +179,11 @@ OsInference infer_os(const TcpSynData &syn) noexcept {
     inf.ttl_family    = family_from_initial_ttl(inf.initial_ttl);
     inf.layout_family = classify_layout(syn);
 
-    if (inf.layout_family == OsFamily::Unknown) {
+    if (syn.malformed_options) {
+        // No stock kernel emits these, so neither layout nor TTL can be trusted
+        inf.stack_anomaly = true;
+        inf.family = OsFamily::Unknown;
+    } else if (inf.layout_family == OsFamily::Unknown) {
         inf.family = inf.ttl_family;
     } else if (inf.ttl_family == OsFamily::Unknown) {
         inf.family = inf.layout_family;
@@ -227,6 +247,29 @@ const char *tcp_option_name(uint8_t kind) noexcept {
         case 34: return "TFO";
         default: return nullptr;
     }
+}
+
+std::string describe_path_mtu(const TcpSynData &syn, bool server_side) {
+    if (!syn.has_mss) return "MSS absent (Path MTU undetermined)";
+    // IP + TCP fixed headers: 20 + 20 (IPv4) or 40 + 20 (IPv6)
+    const uint32_t mtu = static_cast<uint32_t>(syn.mss) + (syn.ipv6 ? 60 : 40);
+    const std::string head = "MSS " + std::to_string(syn.mss) + " → Link MTU " + std::to_string(mtu) +
+                             (syn.ipv6 ? " over IPv6" : "");
+    if (mtu == 65535 || mtu == 65536) return head + " (Loopback interface: same host)";
+    if (mtu == 1500) return head + " (Standard Ethernet / Wi-Fi)";
+    if (mtu == 1492) return head + " (PPPoE / DSL encapsulation)";
+    if (mtu > 1500)  return head + " (Jumbo frames / cloud VPC / datacenter fabric)";
+    if (server_side) return head + " (Reduced: server-side MSS clamping, common on CDNs, or a tunnel)";
+    if (mtu >= 1390) return head + " (Reduced: VPN / tunnel e.g. WireGuard, IPsec, OpenVPN, or cellular)";
+    return head + " (Constrained MTU / nested tunnel)";
+}
+
+std::string describe_network_proximity(uint8_t hops) {
+    if (hops == 0) return "Same host or same L2 segment (0 hops)";
+    if (hops <= 4) return "Local Metro / Local Cloud Region (1-4 hops)";
+    if (hops <= 12) return "Regional Internet Transit (5-12 hops)";
+    if (hops <= 20) return "Intercontinental / Multi-AS Transit (13-20 hops)";
+    return "Long-distance / Heavily Routed Transit (>20 hops)";
 }
 
 } // namespace tlsfp

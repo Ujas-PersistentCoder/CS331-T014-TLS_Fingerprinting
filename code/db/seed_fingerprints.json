@@ -119,10 +119,10 @@
     },
     {
       "hash": "f4febc55ea12b31ae17cfb7e614afda8",
-      "server": "chrome_headless",
+      "server": "OpenSSL s_server",
       "category": "server",
       "source": "self-captured: chrome_headless_20260831_061717.pcap",
-      "notes": ""
+      "notes": "JA3S string 771,4865,43-51: OpenSSL s_server negotiating TLS_AES_128_GCM_SHA256 with headless Chrome as the client. Previously mislabelled 'chrome_headless' (the client, not the server)."
     }
   ],
   "ja4": [
@@ -181,40 +181,13 @@
       "notes": "JA4 best-effort, verify against reference"
     },
     {
-      "hash": "t13d3110h2_e8f1e7e78f70_b26ce05bbdd6",
-      "client": "curl",
-      "version": "controlled local capture",
-      "os": "linux",
-      "category": "cli",
-      "source": "self-captured: controlled_curl.pcap",
-      "notes": "Generated with curl against the local OpenSSL s_server on loopback."
-    },
-    {
       "hash": "t13d3112h2_e8f1e7e78f70_b26ce05bbdd6",
       "client": "curl",
       "version": "controlled local capture (Python JA4 representation)",
       "os": "linux",
       "category": "cli",
       "source": "self-captured: controlled_curl.pcap",
-      "notes": "Python JA4 test-vector representation of the same ClientHello; C++ representation is t13d3110h2_e8f1e7e78f70_b26ce05bbdd6."
-    },
-    {
-      "hash": "t13d3011h2_1d37bd780c83_8537cf56674e",
-      "client": "curl (Modern)",
-      "version": "unknown",
-      "os": "linux",
-      "category": "cli",
-      "source": "self-captured: cloudflare_run1.pcap",
-      "notes": "JA4 correlated with the known JA3 catalog entry 7a73fb0bdeaa2a79fadf356c34e7577e"
-    },
-    {
-      "hash": "t13d2011h2_a09f3c656075_7f0f34a4126d",
-      "client": "VS Code Update Client",
-      "version": "unknown",
-      "os": "linux",
-      "category": "application",
-      "source": "self-captured: cloudflare_run1.pcap",
-      "notes": "JA4 correlated with the known JA3 catalog entry ecdf4f49dd59effc439639da29186671"
+      "notes": "Generated with curl against the local OpenSSL s_server on loopback. All three engines (Python, Phase 1 C++, Phase 2 C++) produce this value; the former t13d3110h2 twin came from a bug that left SNI and ALPN out of the extension count and was removed."
     },
     {
       "hash": "t13d3013h2_1d37bd780c83_8537cf56674e",
@@ -407,7 +380,7 @@
       "hash": "t12i210700_76e208dd3e22_16bbda4055b2",
       "client": "Cobalt Strike v4.9.1 beacon",
       "category": "foxio-ja4-mapping",
-      "source": "https://github.com/FoxIO-LLC/ja4plus-mapping.csv",
+      "source": "https://github.com/FoxIO-LLC/ja4/blob/main/ja4plus-mapping.csv",
       "notes": "Imported from FoxIO JA4+ mapping; verify against local traffic."
     },
     {
@@ -487,14 +460,14 @@
       "server": "OpenSSL s_server",
       "category": "server",
       "source": "self-captured: controlled_curl.pcap",
-      "notes": "Controlled local OpenSSL server capture; same JA4S was also present in the legacy curl_test2 capture."
+      "notes": "Controlled local OpenSSL server capture, TLS_AES_256_GCM_SHA384 negotiated; same JA4S was also present in the legacy curl_test2 capture. Re-verified with the wire-order JA4S fix: OpenSSL 3.x s_server sends supported_versions then key_share (002b,0033), confirmed in controlled_curl.pcap, client_openssl.pcap, client_requests.pcap and a local s_server -msg dump."
     },
     {
       "hash": "t130200_1301_a56c5b993250",
-      "server": "chrome_headless",
+      "server": "OpenSSL s_server",
       "category": "server",
       "source": "self-captured: chrome_headless_20260831_061717.pcap",
-      "notes": "JA4S best-effort, verify against reference"
+      "notes": "TLS_AES_128_GCM_SHA256 negotiated with headless Chrome as the client. Previously mislabelled 'chrome_headless' (the client, not the server); the old sorted-extension JA4S also matched every TLS 1.3 server using AES-128-GCM, e.g. Cloudflare in chrome.pcap. Re-verified with the wire-order JA4S fix: OpenSSL 3.x s_server sends supported_versions then key_share (002b,0033), confirmed in controlled_curl.pcap, client_openssl.pcap, client_requests.pcap and a local s_server -msg dump."
     },
     {
       "hash": "t120300_c030_5e2616a54c73",

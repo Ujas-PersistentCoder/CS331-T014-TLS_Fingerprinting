@@ -57,10 +57,11 @@ Without filtering, GREASE makes fingerprints **non-deterministic**: the same bro
 | Extensions | Filtered during JA3/JA4 computation (post-parse) | Filtered during parsing (pre-storage) |
 | Supported groups | Filtered during JA3/JA4 computation (post-parse) | Filtered during parsing (pre-storage) |
 | Supported versions | Filtered during JA4 version resolution | Filtered during parsing (pre-storage) |
-| ALPN | Not filtered (GREASE ALPN is 2-byte binary, not common) | Filtered in parser: `is_alpn_grease()` check |
+| ALPN | Not filtered: JA4 uses the first ALPN value as sent | Not filtered: JA4 uses the first ALPN value as sent |
+| ServerHello extensions | Kept for JA4S (wire order, GREASE included); filtered for JA3S | Kept for JA4S (wire order, GREASE included); filtered in `compute_ja3s()` |
 | Signature algorithms | Filtered during JA4_c computation | Filtered during parsing (pre-storage) |
 
-**Key architectural difference:** Python stores raw (unfiltered) values in the parsed dataclass and filters at fingerprint computation time. C++ filters during parsing, so the stored `ClientHelloData` never contains GREASE values. Both approaches produce identical fingerprints.
+**Key architectural difference:** Python stores raw (unfiltered) values in the parsed dataclass and filters at fingerprint computation time. C++ filters ClientHello fields during parsing, so the stored `ClientHelloData` never contains GREASE values. Both approaches produce identical fingerprints. The exceptions are ALPN and ServerHello extensions, which both implementations keep as sent: FoxIO's reference uses the first ALPN value without GREASE filtering, and hashes the server's extensions exactly as they appear.
 
 ### Requirement → Design Choice → Reason → Alternative → Trade-off
 

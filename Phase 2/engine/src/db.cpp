@@ -495,6 +495,15 @@ bool FingerprintDatabase::enroll(FingerprintKind kind, const std::string &hash,
     return store(record);
 }
 
+// Negative-lookup memo for Redis misses. Fingerprints are attacker-controlled (a flood of
+// unique ClientHellos or SYN windows), so the set is capped; clearing it only costs one
+// extra Redis round trip per key afterwards.
+void FingerprintDatabase::remember_missing(const std::string &key) {
+    constexpr std::size_t MISSING_CACHE_MAX_ENTRIES = 65536;
+    if (missing_cache_.size() >= MISSING_CACHE_MAX_ENTRIES) missing_cache_.clear();
+    missing_cache_.insert(key);
+}
+
 bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
                                 FingerprintRecord &record) {
     const std::string key = redis_key(kind, hash);
@@ -505,14 +514,12 @@ bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
     }
     if (missing_cache_.count(key)) return false;
 
-    if (!is_connected()) {
-        missing_cache_.insert(key);
-        return false;
-    }
+    // Offline, cache_ already holds the whole catalog: a miss is final and needs no memo
+    if (!is_connected()) return false;
 
     RedisValue reply;
     if (!send_command({"HGETALL", key}, reply) || reply.type != '*' || reply.items.empty()) {
-        missing_cache_.insert(key);
+        remember_missing(key);
         return false;
     }
 
@@ -521,7 +528,7 @@ bool FingerprintDatabase::lookup(FingerprintKind kind, const std::string &hash,
         fields[reply.items[i].text] = reply.items[i + 1].text;
     }
     if (fields.empty()) {
-        missing_cache_.insert(key);
+        remember_missing(key);
         return false;
     }
 

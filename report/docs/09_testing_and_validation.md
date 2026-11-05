@@ -61,16 +61,18 @@ Tests the byte-level TLS record and handshake parsing logic.
 
 | Test | What It Verifies |
 |------|-----------------|
-| `test_is_literal_ip` | IPv4 and IPv6 address detection for SNI indicator |
-| `test_resolve_ja4_version` | Version resolution from `supported_versions` extension (prefers 0x0304) |
-| `test_resolve_alpn_chars` | ALPN first+last character extraction, including edge cases |
+| `test_resolve_ja4_version` | Version is the highest `supported_versions` value; unknown → `00`; SSL 2.0 = `0x0002` → `s2` |
+| `test_resolve_alpn_chars` | ALPN first+last character extraction from the first value as sent, including empty and GREASE first values |
+| `test_resolve_alpn_chars_spec_hex_examples` | Every hex-fallback example from FoxIO's `JA4.md` (`0xAB` → `ab`, `0x30 0xAB` → `3b`, ...) |
+| `test_ja4_foxio_reference_vector` | Full JA4 against FoxIO's published value for `tls-handshake.pcapng` |
 | `test_ja4_known_vector_controlled_curl` | Full JA4 computation against the controlled curl capture test vector |
 | `test_ja4_cipher_grease_filter` | GREASE cipher suites excluded from JA4_b |
 | `test_ja4_extension_grease_filter` | GREASE extensions excluded from JA4_c |
 | `test_ja4_empty_extensions` | Correct output when no extensions are present |
-| `test_ja4_ip_literal_sni` | SNI indicator is `'i'` for IP address literals |
-| `test_ja4s_known_vector_controlled_curl` | Full JA4S computation against controlled curl ServerHello |
-| `test_ja4s_alpn_in_output` | ALPN characters appear correctly in JA4S prefix |
+| `test_ja4_sni_flag_follows_extension_presence` | SNI indicator is `'d'` exactly when the SNI extension is present |
+| `test_ja4s_foxio_reference_vectors` | Full JA4S against FoxIO's published values, including two servers that differ only in extension order |
+| `test_ja4s_extensions_hashed_in_wire_order` | JA4S_c keeps wire order and keeps ALPN |
+| `test_ja4s_keeps_grease` | GREASE in a ServerHello counts and hashes, as in FoxIO's reference |
 | `test_ja4s_version_fallback` | Fallback to handshake body version when `supported_versions` is absent |
 
 ### 2.4 TCP Reassembly Tests — `test_capture.py`
@@ -260,7 +262,8 @@ Both implementations validate against known-good test vectors from:
 |--------|------|---------|
 | Salesforce official specification | JA3 raw string + MD5 hash | C++ `SalesforceOfficialVector1`, `SalesforceOfficialVector2`; Python `test_ja3_known_fingerprint_1`, `test_ja3_known_fingerprint_empty_sections` |
 | RFC 1321 | MD5 digest values | C++ `MD5Test` suite |
-| Self-captured PCAPs | JA3/JA3S/JA4/JA4S hashes from controlled captures | Python `test_ja4_known_vector_controlled_curl`, `test_ja4s_known_vector_controlled_curl` |
+| Self-captured PCAPs | JA3/JA3S/JA4 hashes from controlled captures | Python `test_ja4_known_vector_controlled_curl` |
+| FoxIO JA4 reference (`FoxIO-LLC/ja4`, `python/test/testdata`) | JA4/JA4S values published for FoxIO's test pcaps | Python `test_ja4_foxio_reference_vector`, `test_ja4s_foxio_reference_vectors`, `test_integration_*`; C++ `JA4Test.FoxIOReferenceVector`, `JA4STest.FoxIOReferenceVectors` |
 
 ### 4.2 Cross-Implementation Validation
 
