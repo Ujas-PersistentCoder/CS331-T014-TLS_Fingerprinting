@@ -53,6 +53,7 @@ private:
         bool tls_started{false};
         bool syn_anchored{false};
         std::optional<time_t> waiting_since;
+        time_t last_seen{0};
         std::unique_ptr<FragmentedHandshake> partial;
     };
     void report(const FlowKey &, Stream &, ParseStatus, const char *);

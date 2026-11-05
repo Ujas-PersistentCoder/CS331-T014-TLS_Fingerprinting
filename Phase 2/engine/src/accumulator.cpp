@@ -16,12 +16,13 @@ void TwoTierAccumulator::report(const FlowKey &key, Stream &stream, ParseStatus 
     stream.partial.reset();
 }
 
-void TwoTierAccumulator::start_flow(const FlowKey &key, uint32_t seq, time_t) {
+void TwoTierAccumulator::start_flow(const FlowKey &key, uint32_t seq, time_t now) {
     forget_flow(key);
     if (streams_.size() < max_streams_) {
         auto &stream = streams_[key];
         stream.next_seq = seq;
         stream.syn_anchored = true;
+        stream.last_seen = now;
     }
 }
 
@@ -69,8 +70,10 @@ void TwoTierAccumulator::process_segment(const FlowKey &key, uint32_t seq,
         }
         it = streams_.try_emplace(key).first;
         it->second.next_seq = seq;
+        it->second.last_seen = now;
     }
     Stream &stream = it->second;
+    stream.last_seen = now;
     if (stream.stopped) return;
     // TCP sequence numbers wrap modulo 2^32. The signed distance gives local
     // ordering for separations below half the sequence space, as assumed here.
@@ -152,20 +155,34 @@ void TwoTierAccumulator::process_segment(const FlowKey &key, uint32_t seq,
             // spanning multiple records remains the parser's unsupported case.
             if (ready_) ready_(key, partial.bytes.data(), partial.bytes.size());
             stream.partial.reset();
+            stream.last_seen = now;
         }
     }
 }
 
 void TwoTierAccumulator::cleanup_stale_flows(time_t now) {
-    for (auto &[key, stream] : streams_) {
+    for (auto it = streams_.begin(); it != streams_.end(); ) {
+        const auto &key = it->first;
+        auto &stream = it->second;
+
         if (!stream.stopped && stream.waiting_since && now > *stream.waiting_since &&
             now - *stream.waiting_since > FLOW_TIMEOUT_SECONDS) {
             report(key, stream, ParseStatus::Incomplete, "initial_data_timeout");
             stream.waiting_since.reset();
+            stream.last_seen = now;
         }
         if (stream.partial && now > stream.partial->last_seen &&
-            now - stream.partial->last_seen > FLOW_TIMEOUT_SECONDS)
+            now - stream.partial->last_seen > FLOW_TIMEOUT_SECONDS) {
             report(key, stream, ParseStatus::Incomplete, "record_timeout");
+            stream.last_seen = now;
+        }
+
+        const bool idle_expired = (now > stream.last_seen && (now - stream.last_seen) > FLOW_TIMEOUT_SECONDS);
+        if (idle_expired && (stream.stopped || !stream.partial)) {
+            it = streams_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
