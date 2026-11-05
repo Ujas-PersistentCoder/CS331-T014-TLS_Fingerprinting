@@ -279,7 +279,7 @@ TEST(AccumulatorCapacityTest, SequentialFragmentedFlowsCleanedUpUnderCapacityLim
     std::vector<std::vector<uint8_t>> records;
     TwoTierAccumulator accum([&](const FlowKey &, const uint8_t *d, size_t len) {
         records.emplace_back(d, d + len);
-    }, {}, {}, 2);
+    }, {}, {}, 2, false); // Standalone idle eviction belongs to ECH-off mode.
 
     FlowKey k1 = make_ipv4_key("10.0.0.1", "10.0.0.2", 1001, 443);
     FlowKey k2 = make_ipv4_key("10.0.0.1", "10.0.0.2", 1002, 443);

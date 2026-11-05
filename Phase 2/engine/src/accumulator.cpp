@@ -178,7 +178,11 @@ void TwoTierAccumulator::cleanup_stale_flows(time_t now) {
         }
 
         const bool idle_expired = (now > stream.last_seen && (now - stream.last_seen) > FLOW_TIMEOUT_SECONDS);
-        if (idle_expired && (stream.stopped || !stream.partial)) {
+        // ECH connection generations own stream retirement. Keep delivered-byte
+        // watermarks and stopped directions until CaptureEngine forgets that
+        // generation; the record timeout only releases unfinished record bytes.
+        // Without ECH tracking, reclaim idle entries here to keep capacity reusable.
+        if (!enable_ech_ && idle_expired && (stream.stopped || !stream.partial)) {
             it = streams_.erase(it);
         } else {
             ++it;
