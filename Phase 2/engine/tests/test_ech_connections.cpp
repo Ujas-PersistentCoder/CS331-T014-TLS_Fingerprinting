@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "tlsfp/capture.hpp"
 #include "tlsfp/parser.hpp"
+#include "tlsfp/ja4.hpp"
 #include "fixtures/ech_fixtures.hpp"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
@@ -374,4 +375,63 @@ TEST_F(ConnectionTest, Tls13OfferAloneDoesNotMakeUnknownCcsPlaintext) {
     bytes.insert(bytes.end(),encoded.begin(),encoded.end()); send(bytes,true,1000); engine->finish_capture();
     ASSERT_EQ(rows().size(),1u); EXPECT_EQ(engine->stats().server_hellos,0u);
     EXPECT_NE(rows()[0].find("ccs_plaintext_context_unknown"),std::string::npos);
+}
+
+TEST(ConnectionReplayTest, WorkerCountQuietModeAndJa4tPreserveOrderedSummaries) {
+    std::vector<std::string> baseline;
+    uint64_t client_count = 0, server_count = 0;
+    for (bool quiet : {false, true}) {
+        for (size_t workers : {size_t{1}, size_t{4}}) {
+            const auto path = unused_path();
+            CaptureOptions options;
+            options.read_filename = std::string(TLSFP_FIXTURES_DIR) + "/ech_checkpoint2.pcap";
+            options.json_filename = path;
+            options.num_threads = workers;
+            options.enable_ja4t = true;
+            options.quiet = quiet;
+            CaptureEngine engine(options);
+            testing::internal::CaptureStdout();
+            const bool success = engine.run();
+            const auto output = testing::internal::GetCapturedStdout();
+            EXPECT_TRUE(success);
+            EXPECT_EQ(engine.stats().dropped_packets.load(), 0u);
+            if (!quiet) {
+                EXPECT_NE(output.find("JA4T: "), std::string::npos);
+                EXPECT_NE(output.find("JA4TS: "), std::string::npos);
+            } else {
+                EXPECT_TRUE(output.empty());
+            }
+            auto rows = read_rows(path);
+            unlink(path.c_str());
+            ASSERT_EQ(rows.size(), 11u);
+            for (auto &row : rows) {
+                const auto first = row.find("\"capture_id\":\"");
+                ASSERT_NE(first, std::string::npos);
+                const auto last = row.find('"', first + 14);
+                ASSERT_NE(last, std::string::npos);
+                row.erase(first, last - first);
+            }
+            if (baseline.empty()) {
+                baseline = rows;
+                client_count = engine.stats().client_hellos.load();
+                server_count = engine.stats().server_hellos.load();
+            } else {
+                EXPECT_EQ(rows, baseline);
+                EXPECT_EQ(engine.stats().client_hellos.load(), client_count);
+                EXPECT_EQ(engine.stats().server_hellos.load(), server_count);
+            }
+        }
+    }
+}
+
+TEST_F(ConnectionTest, GreaseServerVersionRetainsWireValueWithoutLosingJa4sFallback) {
+    const auto record = server(0x0a0a);
+    ServerHelloData parsed;
+    ASSERT_TRUE(parse_server_hello(record.data(), record.size(), parsed));
+    EXPECT_EQ(parsed.selected_version, 0x0a0a);
+    EXPECT_EQ(compute_ja4s(parsed).ja4_a.substr(0, 3), "t12");
+    start(); send(client()); send(record, true, 1000);
+    ASSERT_EQ(rows().size(), 1u);
+    EXPECT_NE(rows()[0].find("\"negotiated_version\":2570"), std::string::npos);
+    EXPECT_EQ(rows()[0].find("I3_"), std::string::npos);
 }

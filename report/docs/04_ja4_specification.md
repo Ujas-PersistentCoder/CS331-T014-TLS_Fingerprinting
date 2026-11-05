@@ -36,8 +36,9 @@ Position   Field            Values              Example
 ─────────────────────────────────────────────────────────
 1          Protocol         t=TCP, q=QUIC       t
 2-3        TLS Version      13, 12, 11, 10,     13
-                            s3, s2, s1, 00
-4          SNI Indicator    d=domain, i=IP/none  d
+                            s3, s2, d1-d3, 00
+4          SNI Indicator    d=SNI ext present,   d
+                            i=absent
 5-6        Cipher Count     00–99 (non-GREASE)   15
 7-8        Extension Count  00–99 (non-GREASE)   16
 9-10       ALPN Chars       First+Last char       h2
@@ -45,21 +46,16 @@ Position   Field            Values              Example
 
 ### 3.1 Version Resolution
 
-JA4 prefers the `supported_versions` extension (0x002b) over the handshake body version. This correctly identifies TLS 1.3 connections where the body version is frozen at 0x0303.
+JA4 prefers the `supported_versions` extension (0x002b) over the handshake body version. This correctly identifies TLS 1.3 connections where the body version is frozen at 0x0303. Per the spec, the version is the **highest** non-GREASE value in the extension, mapped through the spec's table (`0x0002` = `s2`, `0x0300` = `s3`, `0xfeff`/`0xfefd`/`0xfefc` = `d1`/`d2`/`d3`); an unrecognised highest value gives `00`, as in FoxIO's reference.
 
 ```python
 # ja4.py — resolve_ja4_version
 def resolve_ja4_version(fields: ClientHelloFields) -> str:
-    if fields.supported_versions:
-        filtered = filter_grease(fields.supported_versions)
-        if 0x0304 in filtered: return "13"
-        if 0x0303 in filtered: return "12"
-        if 0x0302 in filtered: return "11"
-        if 0x0301 in filtered: return "10"
+    versions = filter_grease(fields.supported_versions or ())
+    if versions:
+        return ja4_version_code(max(versions))
     # Fallback to handshake body version
-    v = fields.tls_version
-    if v == 0x0304: return "13"
-    # ...
+    return ja4_version_code(fields.tls_version)
 ```
 
 ```cpp
@@ -91,31 +87,29 @@ static inline const char* resolve_ja4_version(const ClientHelloData &client) noe
 ### 3.2 SNI Indicator
 
 ```python
-if fields.server_name and not is_literal_ip(fields.server_name):
-    sni = 'd'   # Domain name present
-else:
-    sni = 'i'   # IP literal or no SNI
+# Spec: "If the SNI extension (0x0000) exists, then the destination of the connection is a domain"
+sni = 'd' if 0x0000 in fields.extensions else 'i'
 ```
 
-The `is_literal_ip()` function uses `ipaddress.ip_address()` (Python) or `inet_pton` (C++) to determine if the SNI hostname is an IP address literal.
+The flag records whether the SNI extension is present, not what it contains. Clients omit SNI when connecting to an IP address (RFC 6066 forbids IP literals in SNI), which is why its absence indicates an IP destination.
 
 ### 3.3 ALPN Characters
 
-The first and last characters of the first ALPN protocol string are used. Non-alphanumeric characters are replaced with `'0'`. No ALPN produces `"00"`.
+The first and last characters of the **first** ALPN value as sent (GREASE values included), used unchanged. If the first or last byte is not ASCII alphanumeric, the first and last characters of the value's hex encoding are used instead. No ALPN, or an empty first value, produces `"00"`.
 
 ```python
 def resolve_alpn_chars(alpn: tuple[str, ...] | None) -> str:
     if not alpn or not alpn[0]:
         return "00"
-    first_alpn = alpn[0]
-    f = first_alpn[0]
-    l = first_alpn[-1]
-    f_char = f.lower() if (f.isalnum() and f.isascii()) else '0'
-    l_char = l.lower() if (l.isalnum() and l.isascii()) else '0'
-    return f_char + l_char
+    first_alpn = alpn[0]                 # latin-1 decoded: one character per wire byte
+    f, l = first_alpn[0], first_alpn[-1]
+    if f in ASCII_ALNUM and l in ASCII_ALNUM:
+        return f + l
+    hex_value = first_alpn.encode("latin-1").hex()
+    return hex_value[0] + hex_value[-1]
 ```
 
-Examples: `"h2"` → `"h2"`, `"http/1.1"` → `"h1"`, `None` → `"00"`.
+Examples: `"h2"` → `"h2"`, `"http/1.1"` → `"h1"`, `None` → `"00"`, bytes `0xBA 0xAD` → hex `baad` → `"bd"`, `0x30 0xAB` → `"3b"`. FoxIO's reference tool still prints `"99"` for non-ASCII bytes; this implementation follows the written specification (`technical_details/JA4.md`).
 
 ---
 
@@ -248,8 +242,8 @@ JA4S follows the same three-part structure adapted for the ServerHello:
 Position   Field            Values
 ──────────────────────────────────────
 1          Protocol         t=TCP, q=QUIC
-2-3        TLS Version      13, 12, 11, 10, 00
-4-5        Extension Count  00–99
+2-3        TLS Version      13, 12, 11, 10, s3, s2, 00
+4-5        Extension Count  00–99 (all extensions, as sent)
 6-7        ALPN Chars       First+Last char
 ```
 
@@ -268,16 +262,15 @@ Note: JA4S_b is **not hashed** — it's the raw cipher value. This is because th
 
 ### 7.3 JA4S_c (12 Hex Characters)
 
-Same as JA4_c but:
-- Only ALPN (0x0010) is excluded (no SNI exclusion since ServerHello doesn't have SNI)
-- No signature algorithms section
+Unlike JA4_c, the server's extensions are hashed **in wire order**, with nothing sorted or removed (ALPN and GREASE stay in), and there is no signature algorithms section. FoxIO's reference implementation says so explicitly ("preserving the original order of server's TLS extensions"). The server does not randomise its extension order, so the order identifies its TLS stack: OpenSSL sends `002b,0033` while BoringSSL-based servers (Google, Cloudflare) send `0033,002b`.
 
 ```python
 def compute_ja4s_c_raw(fields: ServerHelloFields) -> str:
-    exts = filter_grease(fields.extensions)
-    filtered = [e for e in exts if e != 0x0010]
-    return ",".join(f"{e:04x}" for e in sorted(filtered))
+    # Wire order, nothing sorted or removed: the server's extension order is its fingerprint
+    return ",".join(f"{e:04x}" for e in fields.extensions)
 ```
+
+An earlier version sorted the extensions and dropped ALPN, as JA4_c does. That made the two stacks above indistinguishable and disagreed with FoxIO's published values on 31 of FoxIO's own test handshakes.
 
 ### 7.4 JA4S Version Resolution
 
@@ -325,17 +318,17 @@ Captured Fields:
   supported_versions: [0x0304, 0x0303]  → resolves to "13"
   server_name: "example.com"             → 'd' (domain)
   cipher_suites (after GREASE): 31 suites
-  extensions (after GREASE): 10 extensions
+  extensions (after GREASE): 12 extensions (SNI and ALPN included)
   first ALPN: "h2"                       → "h2"
   signature_algorithms: [0x0403, 0x0503, ...]
 ```
 
 ### Step-by-step:
 
-1. **JA4_a:** `t13d3110h2`
-   - `t` = TCP, `13` = TLS 1.3, `d` = domain SNI, `31` = cipher count, `10` = ext count, `h2` = ALPN
+1. **JA4_a:** `t13d3112h2`
+   - `t` = TCP, `13` = TLS 1.3, `d` = SNI present, `31` = cipher count, `12` = ext count, `h2` = ALPN
 2. **JA4_b:** Sort ciphers → hex → SHA-256[:12] → `e8f1e7e78f70`
 3. **JA4_c:** Sort extensions (minus SNI, ALPN) → hex → append `_` + wire-order sigalgs → SHA-256[:12] → `b26ce05bbdd6`
-4. **Final:** `t13d3110h2_e8f1e7e78f70_b26ce05bbdd6`
+4. **Final:** `t13d3112h2_e8f1e7e78f70_b26ce05bbdd6`
 
 This matches the seed database entry for curl in `code/db/seed_fingerprints.json`.

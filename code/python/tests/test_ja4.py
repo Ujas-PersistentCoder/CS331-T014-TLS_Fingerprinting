@@ -3,19 +3,14 @@ from src.parser import ClientHelloFields, ServerHelloFields
 from src.ja4 import (
     compute_ja4_string,
     compute_ja4s_string,
-    is_literal_ip,
     resolve_ja4_version,
     resolve_alpn_chars
 )
 
-def test_is_literal_ip():
-    assert is_literal_ip("192.168.1.1")
-    assert is_literal_ip("10.0.0.1")
-    assert is_literal_ip("2001:db8::1")
-    assert not is_literal_ip("example.com")
-    assert not is_literal_ip("localhost")
-    assert not is_literal_ip(None)
-    assert not is_literal_ip("")
+# FoxIO reference vectors: values from FoxIO-LLC/ja4 python/test/testdata/*.json
+FOXIO_CIPHERS = (0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8,
+                 0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035)
+FOXIO_SIGALGS = (0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601)
 
 def test_resolve_ja4_version():
     # TLS 1.3
@@ -49,15 +44,59 @@ def test_resolve_ja4_version():
     )
     assert resolve_ja4_version(fields_fallback) == "10"
 
+    # Highest supported_versions value decides, even if it is unknown (FoxIO reference)
+    fields_unknown = ClientHelloFields(
+        tls_version=0x0303,
+        cipher_suites=(), extensions=(), elliptic_curves=(), ec_point_formats=(), server_name=None,
+        supported_versions=(0x0303, 0x7f1c)
+    )
+    assert resolve_ja4_version(fields_unknown) == "00"
+
+    # SSL 2.0 is 0x0002 in the spec table
+    fields_ssl2 = ClientHelloFields(
+        tls_version=0x0002,
+        cipher_suites=(), extensions=(), elliptic_curves=(), ec_point_formats=(), server_name=None,
+    )
+    assert resolve_ja4_version(fields_ssl2) == "s2"
+
 def test_resolve_alpn_chars():
     assert resolve_alpn_chars(("h2", "http/1.1")) == "h2"
     assert resolve_alpn_chars(("http/1.1",)) == "h1"
-    assert resolve_alpn_chars(("H3",)) == "h3"
+    assert resolve_alpn_chars(("H3",)) == "H3"  # Characters are used as-is, no case folding
+    assert resolve_alpn_chars(("x",)) == "xx"    # A single character is both ends
     assert resolve_alpn_chars(None) == "00"
     assert resolve_alpn_chars(()) == "00"
     assert resolve_alpn_chars(("",)) == "00"
-    # Non-alphanumeric shortcut
-    assert resolve_alpn_chars(("\xea\xea",)) == "00"
+    assert resolve_alpn_chars(("", "h2")) == "00"  # Only the FIRST value counts, even if empty
+    assert resolve_alpn_chars(("\x0a\x0a", "h2")) == "0a"  # GREASE first value is used, as hex
+
+@pytest.mark.parametrize("raw, expected", [
+    # Every example from technical_details/JA4.md, "ALPN Extension Value"
+    (b"\xab", "ab"),
+    (b"\x20", "20"),
+    (b"\xab\xcd", "ad"),
+    (b"\x20\x61", "21"),
+    (b"\x30\xab", "3b"),
+    (b"\x61\x20", "60"),
+    (b"\x30\x31\xab\xcd", "3d"),
+    (b"\x30\xab\xcd\x31", "01"),
+])
+def test_resolve_alpn_chars_spec_hex_examples(raw, expected):
+    assert resolve_alpn_chars((raw.decode("latin-1"),)) == expected
+
+def test_ja4_foxio_reference_vector():
+    # tls-handshake.pcapng stream 0, wire order from JA4_ro.1
+    fields = ClientHelloFields(
+        tls_version=0x0303,
+        cipher_suites=FOXIO_CIPHERS,
+        extensions=(0xff01, 0x0033, 0x002d, 0x0005, 0x4469, 0x000d, 0x0010, 0x0023, 0x001b,
+                    0x002b, 0x0000, 0x0012, 0x000a, 0x0017, 0x000b, 0x0015),
+        elliptic_curves=(), ec_point_formats=(), server_name="example.com",
+        alpn=("h2", "http/1.1"),
+        signature_algorithms=FOXIO_SIGALGS,
+        supported_versions=(0x0304, 0x0303),
+    )
+    assert compute_ja4_string(fields) == "t13d1516h2_8daaf6152771_e5627efa2ab1"
 
 def test_ja4_known_vector_controlled_curl():
     # Derived from controlled_curl.pcap.
@@ -118,31 +157,46 @@ def test_ja4_empty_extensions():
     # ja4_c should be the empty sentinel
     assert ja4.endswith("_000000000000")
 
-def test_ja4_ip_literal_sni():
-    fields = ClientHelloFields(
+def test_ja4_sni_flag_follows_extension_presence():
+    # Spec: 'd' if the SNI extension exists, whatever it holds (even an IP literal)
+    with_sni = ClientHelloFields(
         tls_version=0x0303,
         cipher_suites=(0xc02b,),
         extensions=(0x0000,), # SNI
         elliptic_curves=(), ec_point_formats=(),
-        server_name="192.168.1.1" # IP literal
+        server_name="192.168.1.1"
     )
-    ja4 = compute_ja4_string(fields)
-    # SNI character should be 'i', not 'd', because it's an IP literal
-    assert ja4.startswith("t12i010100_")
+    assert compute_ja4_string(with_sni).startswith("t12d010100_")
 
-def test_ja4s_known_vector_controlled_curl():
-    # Derived from controlled_curl.pcap in seed db
-    # t130200_1302_a56c5b993250
+    # No SNI extension -> 'i', even if a name was somehow recorded
+    without_sni = ClientHelloFields(
+        tls_version=0x0303,
+        cipher_suites=(0xc02b,),
+        extensions=(0x000a,),
+        elliptic_curves=(), ec_point_formats=(),
+        server_name="example.com"
+    )
+    assert compute_ja4_string(without_sni).startswith("t12i010100_")
+
+@pytest.mark.parametrize("version, cipher, extensions, alpn, expected", [
+    # FoxIO tls-handshake.pcapng streams 0 and 31: same extensions, different order
+    (0x0304, 0x1301, (0x0033, 0x002b), None, "t130200_1301_234ea6891581"),
+    (0x0304, 0x1301, (0x002b, 0x0033, 0x0029), None, "t130300_1301_0ee26285a86f"),
+    # FoxIO badcurveball.pcap: TLS 1.2, ALPN kept in the hash and in wire order
+    (None, 0xc02b, (0x0000, 0xff01, 0x000b, 0x0023, 0x0010), "http/1.1", "t1205h1_c02b_845f7282a956"),
+])
+def test_ja4s_foxio_reference_vectors(version, cipher, extensions, alpn, expected):
     fields = ServerHelloFields(
         tls_version=0x0303,
-        cipher_suite=0x1302,
-        extensions=(0x002b, 0x0033),
-        supported_version=0x0304
+        cipher_suite=cipher,
+        extensions=extensions,
+        supported_version=version,
+        alpn=alpn
     )
-    ja4s = compute_ja4s_string(fields)
-    assert ja4s == "t130200_1302_a56c5b993250"
+    assert compute_ja4s_string(fields) == expected
 
-def test_ja4s_alpn_in_output():
+def test_ja4s_extensions_hashed_in_wire_order():
+    import hashlib
     fields = ServerHelloFields(
         tls_version=0x0303,
         cipher_suite=0x1302,
@@ -151,11 +205,20 @@ def test_ja4s_alpn_in_output():
         alpn="h2"
     )
     ja4s = compute_ja4s_string(fields)
-    # 'h2' is in ALPN fields. Excount is 2 (0x0010 and 0x002b are both non-GREASE).
     assert ja4s.startswith("t1302h2_")
+    # Not sorted, and ALPN is NOT removed
+    assert ja4s.endswith(hashlib.sha256(b"0010,002b").hexdigest()[:12])
+
+def test_ja4s_keeps_grease():
+    # FoxIO reference: server extensions include GREASE in both the count and the hash
     import hashlib
-    # ALPN (0010) is stripped from ja4s_c hash, leaving only 002b
-    assert hashlib.sha256(b"002b").hexdigest()[:12] in ja4s
+    fields = ServerHelloFields(
+        tls_version=0x0303,
+        cipher_suite=0x1301,
+        extensions=(0x0a0a, 0x002b),
+        supported_version=0x0304,
+    )
+    assert compute_ja4s_string(fields) == "t130200_1301_" + hashlib.sha256(b"0a0a,002b").hexdigest()[:12]
 
 def test_ja4s_version_fallback():
     fields = ServerHelloFields(

@@ -108,21 +108,13 @@ bool parse_client_extensions(ByteReader &ext_reader, ClientHelloData &out) {
             case 0x0010: {
                 uint16_t list_len = 0;
                 if (reader.read_u16_be(list_len)) {
+                    // JA4 uses the FIRST value as sent, GREASE or not (spec and FoxIO reference
+                    // both read the first tls.handshake.extensions_alpn_str). An empty first
+                    // value leaves first_alpn empty, which JA4 renders as "00".
                     auto alpn_sub = reader.spawn_sub_reader(list_len);
-                    if (alpn_sub) {
-                        while (alpn_sub->has_bytes(1)) {
-                            uint8_t proto_len = 0;
-                            if (!alpn_sub->read_u8(proto_len) || proto_len == 0 || !alpn_sub->has_bytes(proto_len)) {
-                                break;
-                            }
-                            std::string_view cand;
-                            alpn_sub->read_string_view(proto_len, cand);
-
-                            if (!is_alpn_grease(cand)) {
-                                out.first_alpn = cand;
-                                break; // Spec: only capture first non-GREASE protocol
-                            }
-                        }
+                    uint8_t proto_len = 0;
+                    if (alpn_sub && alpn_sub->read_u8(proto_len) && alpn_sub->has_bytes(proto_len)) {
+                        alpn_sub->read_string_view(proto_len, out.first_alpn);
                     }
                 }
                 break;
@@ -165,9 +157,9 @@ bool parse_server_extensions(ByteReader &ext_reader, ServerHelloData &out) {
         }
         ByteReader &reader = *sub_opt;
 
-        if (!is_grease(ext_type)) {
-            out.extensions.push_back(ext_type);
-        }
+        // Raw wire order, GREASE included: JA4S hashes exactly what the server sent.
+        // JA3S drops GREASE itself.
+        out.extensions.push_back(ext_type);
 
         switch (ext_type) {
             // Extension 0x002b: Supported Versions in ServerHello is exactly 2 bytes

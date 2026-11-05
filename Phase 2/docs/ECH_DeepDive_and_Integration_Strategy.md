@@ -132,6 +132,10 @@ experiments/ech/        README.md  label_join.py  features.py  manifests/  resul
 
 Keep ECH observation types with the ECH headers. Extend existing tests and build declarations as needed. Do not split or move stable fingerprint, database, or capture modules merely for this feature. The script names describe planned harness responsibilities; no implementation or decryption-effort estimate is implied.
 
+The November 5 merge with main preserves ordered ECH tracking alongside worker
+reporting. See [ECH_Main_Integration.md](ECH_Main_Integration.md) for ownership,
+compatibility decisions, repeated parsing costs, and validation boundaries.
+
 ### 3.2 Parse Once, Interpret After the Needed Evidence Arrives
 
 Within one hello, decode extension-local facts first and finalize cross-extension checks after the complete extension vector. This preserves independence from randomized extension ordering. Retain raw extension order for standard fingerprints; ECH metadata is an additional feature set, not a modified JA3/JA4 definition.

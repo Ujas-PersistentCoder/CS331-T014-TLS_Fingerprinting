@@ -2,9 +2,6 @@
 #include <openssl/evp.h>
 #include <algorithm>
 #include <vector>
-#include <cctype>
-#include <arpa/inet.h>
-#include <cstring>
 
 namespace tlsfp {
 
@@ -39,65 +36,54 @@ struct ThreadLocalSha256Context {
     ThreadLocalSha256Context& operator=(const ThreadLocalSha256Context&) = delete;
 };
 
-inline const char* resolve_ja4_version(const ClientHelloData &client) noexcept {
-    // Describe the highest recognized offered version, not a negotiated result.
-    // supported_versions takes precedence over TLS 1.3's legacy_version 0x0303.
-    if (!client.supported_versions.empty()) {
-        bool has_13 = false, has_12 = false, has_11 = false, has_10 = false;
-        for (uint16_t v : client.supported_versions) {
-            if (v == 0x0304) has_13 = true;
-            else if (v == 0x0303) has_12 = true;
-            else if (v == 0x0302) has_11 = true;
-            else if (v == 0x0301) has_10 = true;
-        }
-        if (has_13) return "13";
-        if (has_12) return "12";
-        if (has_11) return "11";
-        if (has_10) return "10";
-    }
-
-    switch (client.client_version) {
+// JA4 spec version table (technical_details/JA4.md, "TLS and DTLS Version")
+inline const char* ja4_version_code(uint16_t version) noexcept {
+    switch (version) {
         case 0x0304: return "13"; // TLS 1.3
         case 0x0303: return "12"; // TLS 1.2
         case 0x0302: return "11"; // TLS 1.1
         case 0x0301: return "10"; // TLS 1.0
         case 0x0300: return "s3"; // SSL 3.0
-        case 0x0200: return "s2"; // SSL 2.0
-        case 0x0100: return "s1"; // SSL 1.0
+        case 0x0002: return "s2"; // SSL 2.0
+        case 0xfeff: return "d1"; // DTLS 1.0
+        case 0xfefd: return "d2"; // DTLS 1.2
+        case 0xfefc: return "d3"; // DTLS 1.3
         default:     return "00";
     }
 }
 
+// Highest non-GREASE supported_versions value (parser already drops GREASE), else the
+// ClientHello's legacy_version. An unknown highest value maps to "00", as in FoxIO's reference.
+inline const char* resolve_ja4_version(const ClientHelloData &client) noexcept {
+    if (!client.supported_versions.empty()) {
+        return ja4_version_code(*std::max_element(client.supported_versions.begin(),
+                                                  client.supported_versions.end()));
+    }
+    return ja4_version_code(client.client_version);
+}
+
+inline bool is_ascii_alnum(unsigned char c) noexcept {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+// First and last character of the first ALPN value, unchanged. If either end byte is not
+// ASCII alphanumeric, the first and last characters of the value's hex encoding instead
+// (spec examples: 0xAB -> "ab", 0x30 0xAB -> "3b", 0x61 0x20 -> "60").
 inline void resolve_ja4_alpn(std::string_view alpn, char &first, char &last) noexcept {
     if (alpn.empty()) {
         first = '0';
         last  = '0';
         return;
     }
-    unsigned char f = static_cast<unsigned char>(alpn.front());
-    unsigned char l = static_cast<unsigned char>(alpn.back());
-    first = std::isalnum(f) ? static_cast<char>(std::tolower(f)) : '0';
-    last  = std::isalnum(l) ? static_cast<char>(std::tolower(l)) : '0';
-}
-
-inline bool is_literal_ip(std::string_view host) noexcept {
-    if (host.empty()) return false;
-    if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
-        host.remove_prefix(1);
-        host.remove_suffix(1);
+    const auto f = static_cast<unsigned char>(alpn.front());
+    const auto l = static_cast<unsigned char>(alpn.back());
+    if (is_ascii_alnum(f) && is_ascii_alnum(l)) {
+        first = static_cast<char>(f);
+        last  = static_cast<char>(l);
+    } else {
+        first = HEX_LUT[f >> 4];
+        last  = HEX_LUT[l & 0x0F];
     }
-    char buf[64];
-    if (host.size() >= sizeof(buf)) return false;
-    std::memcpy(buf, host.data(), host.size());
-    buf[host.size()] = '\0';
-
-    struct in_addr addr4;
-    if (inet_pton(AF_INET, buf, &addr4) == 1) return true;
-
-    struct in6_addr addr6;
-    if (inet_pton(AF_INET6, buf, &addr6) == 1) return true;
-
-    return false;
 }
 
 } // anonymous namespace
@@ -134,11 +120,11 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
     fp.ja4_a.push_back('t'); // Protocol: TCP
     fp.ja4_a.append(resolve_ja4_version(client));
 
-    if (client.has_sni && !client.sni.empty() && !is_literal_ip(client.sni)) {
-        fp.ja4_a.push_back('d');
-    } else {
-        fp.ja4_a.push_back('i');
-    }
+    // 'd' whenever the SNI extension is present, whatever it contains (spec: "If the SNI
+    // extension (0x0000) exists, then the destination of the connection is a domain")
+    const bool has_sni_ext =
+        std::find(client.extensions.begin(), client.extensions.end(), uint16_t{0x0000}) != client.extensions.end();
+    fp.ja4_a.push_back(has_sni_ext ? 'd' : 'i');
 
     // Number of Ciphers (excluding GREASE, saturated at 99)
     size_t ciphers_count = std::min<size_t>(client.cipher_suites.size(), 99);
@@ -189,9 +175,7 @@ JA4Fingerprint compute_ja4(const ClientHelloData &client) {
         append_hex4_joined(fp.raw_ja4_c, filtered_exts, ',');
 
         if (!client.signature_algorithms.empty()) {
-            if (!filtered_exts.empty()) {
-                fp.raw_ja4_c.push_back('_');
-            }
+            fp.raw_ja4_c.push_back('_'); // Always "<extensions>_<sigalgs>", as in FoxIO's reference
             // Signature algorithms MUST maintain original wire order per JA4 specification
             append_hex4_joined(fp.raw_ja4_c, client.signature_algorithms, ',');
         }
@@ -215,29 +199,17 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
     fp.ja4_a.reserve(7);
     fp.ja4_a.push_back('t');
 
-    uint16_t ver = (server.selected_version != 0) ? server.selected_version : server.server_version;
-    switch (ver) {
-        case 0x0304: fp.ja4_a.append("13"); break;
-        case 0x0303: fp.ja4_a.append("12"); break;
-        case 0x0302: fp.ja4_a.append("11"); break;
-        case 0x0301: fp.ja4_a.append("10"); break;
-        case 0x0300: fp.ja4_a.append("s3"); break;
-        default:     fp.ja4_a.append("00"); break;
-    }
+    // Preserve main's GREASE fallback for the fingerprint, while retaining the
+    // actual selected-version bytes in telemetry so they cannot supply I3 evidence.
+    const uint16_t ver = (server.selected_version != 0 && !is_grease(server.selected_version))
+        ? server.selected_version : server.server_version;
+    fp.ja4_a.append(ja4_version_code(ver));
 
-    // Extension Count in JA4S_a: All non-GREASE extensions (including ALPN)
+    // Extension count: every extension the server sent, ALPN and GREASE included
+    // (FoxIO reference to_ja4s: "extensions ... in the order they are present (include grease values)")
     size_t exts_count = std::min<size_t>(server.extensions.size(), 99);
     fp.ja4_a.push_back(static_cast<char>('0' + (exts_count / 10)));
     fp.ja4_a.push_back(static_cast<char>('0' + (exts_count % 10)));
-
-    // Filter Extensions for JA4S_c: Exclude ALPN (0x0010)
-    std::vector<uint16_t> filtered_exts;
-    filtered_exts.reserve(server.extensions.size());
-    for (uint16_t ext : server.extensions) {
-        if (ext != 0x0010) {
-            filtered_exts.push_back(ext);
-        }
-    }
 
     // Negotiated ALPN
     char alpn_first, alpn_last;
@@ -249,13 +221,13 @@ JA4Fingerprint compute_ja4s(const ServerHelloData &server) {
     fp.ja4_b.reserve(4);
     append_hex4(fp.ja4_b, server.selected_cipher);
 
-    // 3. JA4S_c (Sorted Extensions Hash, 12 hex chars)
-    if (filtered_exts.empty()) {
+    // 3. JA4S_c: hash of the extensions in WIRE order. Unlike JA4, nothing is sorted or
+    // removed: the server's extension order is part of its fingerprint.
+    if (server.extensions.empty()) {
         fp.ja4_c = "000000000000";
     } else {
-        std::sort(filtered_exts.begin(), filtered_exts.end());
-        fp.raw_ja4_c.reserve(filtered_exts.size() * 5);
-        append_hex4_joined(fp.raw_ja4_c, filtered_exts, ',');
+        fp.raw_ja4_c.reserve(server.extensions.size() * 5);
+        append_hex4_joined(fp.raw_ja4_c, server.extensions, ',');
         fp.ja4_c = sha256_hex_12(fp.raw_ja4_c);
     }
 

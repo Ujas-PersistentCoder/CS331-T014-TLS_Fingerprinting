@@ -24,7 +24,7 @@ struct ClientHelloData {
 
     bool has_sni{false};
     std::string_view sni;                       // Zero-allocation string_view
-    std::string_view first_alpn;                // Required for JA4_a
+    std::string_view first_alpn;                // First ALPN value as sent (GREASE included), for JA4_a
 
     void clear() noexcept {
         client_version = 0;
@@ -44,7 +44,7 @@ struct ServerHelloData {
     uint16_t server_version{0};
     uint16_t selected_version{0};
     uint16_t selected_cipher{0};
-    std::vector<uint16_t> extensions;
+    std::vector<uint16_t> extensions; // Wire order, GREASE included (JA4S); JA3S filters GREASE
     std::string_view first_alpn; // Added: Server-negotiated ALPN protocol
 
     void clear() noexcept {

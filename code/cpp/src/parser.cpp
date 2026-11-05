@@ -40,14 +40,6 @@ struct ByteReader {
     }
 };
 
-// Evaluates if a 2-byte ALPN string is an RFC 8701 GREASE value
-inline bool is_alpn_grease(std::string_view alpn) noexcept {
-    if (alpn.size() != 2) return false;
-    uint8_t b1 = static_cast<uint8_t>(alpn[0]);
-    uint8_t b2 = static_cast<uint8_t>(alpn[1]);
-    return (b1 == b2) && ((b1 & 0x0F) == 0x0A);
-}
-
 // Parse the extensions vector from a ClientHello message
 static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloData &out) {
     const size_t end_offset = reader.offset + exts_len;
@@ -144,21 +136,17 @@ static void parse_extensions(ByteReader &reader, size_t exts_len, ClientHelloDat
                     ByteReader alpn_reader{reader.data, ext_start + ext_len, ext_start};
                     uint16_t list_len = alpn_reader.read_u16();
                     if (list_len + 2 <= ext_len) {
+                        // JA4 uses the FIRST value as sent, GREASE or not (spec and FoxIO
+                        // reference both read the first tls.handshake.extensions_alpn_str).
+                        // An empty first value leaves first_alpn empty, rendered as "00".
                         const size_t list_end = alpn_reader.offset + list_len;
-                        while (alpn_reader.offset < list_end && alpn_reader.has_bytes(1)) {
+                        if (alpn_reader.offset < list_end && alpn_reader.has_bytes(1)) {
                             uint8_t proto_len = alpn_reader.read_u8();
-                            if (proto_len == 0 || alpn_reader.offset + proto_len > list_end || !alpn_reader.has_bytes(proto_len)) break;
-
-                            std::string_view cand(
-                                reinterpret_cast<const char*>(alpn_reader.data + alpn_reader.offset), 
-                                proto_len
-                            );
-                            alpn_reader.skip(proto_len);
-
-                            // Skip GREASE ALPN values to prevent JA4 fingerprint drift
-                            if (!is_alpn_grease(cand)) {
-                                out.first_alpn = cand;
-                                break;
+                            if (alpn_reader.offset + proto_len <= list_end && alpn_reader.has_bytes(proto_len)) {
+                                out.first_alpn = std::string_view(
+                                    reinterpret_cast<const char*>(alpn_reader.data + alpn_reader.offset),
+                                    proto_len
+                                );
                             }
                         }
                     }
@@ -311,9 +299,9 @@ bool parse_server_hello(const uint8_t *payload, size_t len, ServerHelloData &out
                 break;
             }
 
-            if (!is_grease(ext_type)) {
-                out.extensions.push_back(ext_type);
-            }
+            // Raw wire order, GREASE included: JA4S hashes exactly what the server sent.
+            // JA3S drops GREASE itself.
+            out.extensions.push_back(ext_type);
 
             const size_t ext_start = reader.offset;
 

@@ -3,14 +3,19 @@
 
 #include "tlsfp/types.hpp"
 #include "tlsfp/accumulator.hpp"
+#include "tlsfp/ech_analysis.hpp"
 #include <pcap.h>
 #include <string>
 #include <memory>
 #include <chrono>
 #include <functional>
 #include <atomic>
+#include <cstddef>
 
 namespace tlsfp {
+
+struct WorkerContext;
+struct HandshakeJob;
 
 struct CaptureOptions {
     std::string json_filename;
@@ -23,18 +28,25 @@ struct CaptureOptions {
     std::string bpf_filter{"tcp"};
     bool verbose{false};
     bool quiet{false};
+    bool enable_ja4t{false};
     bool prompt_unknown{false};
     std::string seed_filename{"code/db/seed_fingerprints.json"};
     std::string manifest_filename{"code/db/capture_manifest.json"};
     std::string legacy_filename{"code/python/fingerprints.json"};
+    std::string extra_catalog_filename; // Optional lab catalog (same schema as seed), loaded last
     std::string redis_host{"127.0.0.1"};
     uint16_t redis_port{6379};
+    size_t num_threads{0};
 };
 
 struct CaptureStats {
-    uint64_t total_packets{0};
-    uint64_t client_hellos{0};
-    uint64_t server_hellos{0};
+    std::atomic<uint64_t> total_packets{0};
+    std::atomic<uint64_t> client_hellos{0};
+    std::atomic<uint64_t> server_hellos{0};
+    std::atomic<uint64_t> dropped_packets{0};
+    std::atomic<uint64_t> tcp_syns{0};            // Client SYNs fingerprinted (JA4T)
+    std::atomic<uint64_t> tcp_synacks{0};         // Server SYN-ACKs fingerprinted (JA4TS)
+    std::atomic<uint64_t> cross_layer_alerts{0};  // Impersonation / TTL / stack anomaly alerts raised
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point end_time;
 
@@ -45,7 +57,7 @@ struct CaptureStats {
 
     [[nodiscard]] double packets_per_second() const noexcept {
         double sec = elapsed_seconds();
-        return (sec > 0.0) ? (total_packets / sec) : 0.0;
+        return (sec > 0.0) ? (total_packets.load(std::memory_order_relaxed) / sec) : 0.0;
     }
 };
 
@@ -83,20 +95,17 @@ public:
         return stats_;
     }
 
-    void stop() noexcept {
-        stop_requested_ = true;
-        if (pcap_handle_) {
-            pcap_breakloop(pcap_handle_);
-        }
-    }
+    void stop() noexcept;
 
 private:
     bool setup_pcap();
-    void process_assembled_handshake(const FlowKey &key, 
-                                     const uint8_t *record_data, 
+    void process_assembled_handshake(const FlowKey &key,
+                                     const uint8_t *record_data,
                                      size_t record_len);
     void process_hello(const FlowKey &, const uint8_t *, size_t);
     void record_issue(const FlowKey &, ParseStatus, const char *, const uint8_t *, size_t);
+    void dispatch_handshake(const FlowKey &key, const uint8_t *record, size_t len, HelloRole role = HelloRole::Unknown);
+    void process_worker_hello(WorkerContext &ctx, const HandshakeJob &job);
 
     CaptureOptions options_;
     CaptureStats stats_;

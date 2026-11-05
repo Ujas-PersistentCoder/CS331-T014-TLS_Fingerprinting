@@ -16,14 +16,6 @@ namespace tlsfp {
     return ((val & 0x0F0F) == 0x0A0A) && ((val >> 8) == (val & 0x00FF));
 }
 
-// Bitwise check for 2-byte ALPN GREASE values
-[[nodiscard]] inline constexpr bool is_alpn_grease(std::string_view alpn) noexcept {
-    if (alpn.size() != 2) return false;
-    auto b1 = static_cast<uint8_t>(alpn[0]);
-    auto b2 = static_cast<uint8_t>(alpn[1]);
-    return (b1 == b2) && ((b1 & 0x0F) == 0x0A);
-}
-
 /**
  * @brief Extracted and filtered fields from a TLS ClientHello.
  * Reused across handshakes to retain vector capacity and reduce allocations.
@@ -44,7 +36,7 @@ struct ClientHelloData {
 
     bool has_sni{false};
     std::string_view sni;        // Zero-copy view into packet buffer
-    std::string_view first_alpn; // First non-GREASE ALPN protocol
+    std::string_view first_alpn; // First ALPN protocol as sent (GREASE included, per JA4 spec)
 
     void clear() noexcept {
         parse_status = ParseStatus::NotExamined;
@@ -75,7 +67,7 @@ struct ServerHelloData {
     uint16_t server_version{0};
     uint16_t selected_version{0};
     uint16_t selected_cipher{0};
-    std::vector<uint16_t> extensions;
+    std::vector<uint16_t> extensions; // Wire order, GREASE included (JA4S); JA3S filters GREASE
     std::string_view first_alpn;
 
     void clear() noexcept {

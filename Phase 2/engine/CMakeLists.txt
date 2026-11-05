@@ -10,12 +10,21 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose build type" FORCE)
 endif()
 
-# Dependencies
-find_path(PCAP_INCLUDE_DIR NAMES pcap.h)
-find_library(PCAP_LIBRARY NAMES pcap wpcap)
+# macOS dynamic linker (dyld) RPATH configuration
+if(APPLE)
+    set(CMAKE_MACOSX_RPATH ON)
+    set(CMAKE_SKIP_BUILD_RPATH FALSE)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+    list(APPEND CMAKE_BUILD_RPATH "/opt/homebrew/lib" "/usr/local/lib")
+endif()
+
+# 1. OS-Agnostic Packet Capture Dependency
+find_path(PCAP_INCLUDE_DIR NAMES pcap.h PATH_SUFFIXES pcap include)
+find_library(PCAP_LIBRARY NAMES pcap wpcap Packet)
 
 if(NOT PCAP_LIBRARY OR NOT PCAP_INCLUDE_DIR)
-    message(FATAL_ERROR "libpcap development files (pcap.h, libpcap.so/a) not found.")
+    message(FATAL_ERROR "libpcap / Npcap development files (pcap.h, libpcap.so/dylib/a or wpcap.lib) not found.")
 endif()
 
 add_library(pcap::pcap UNKNOWN IMPORTED)
@@ -24,10 +33,11 @@ set_target_properties(pcap::pcap PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${PCAP_INCLUDE_DIR}"
 )
 
+# 2. Cryptographic and Socket Dependencies
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
-# Static Library Target
+# 3. Static Library Target
 add_library(tlsfp_phase2_lib STATIC
     src/accumulator.cpp
     src/capture.cpp
@@ -36,6 +46,7 @@ add_library(tlsfp_phase2_lib STATIC
     src/ech_analysis.cpp
     src/ja3.cpp
     src/ja4.cpp
+    src/ja4t.cpp
     src/db.cpp
 )
 
@@ -43,6 +54,7 @@ target_include_directories(tlsfp_phase2_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${PCAP_INCLUDE_DIR}
+        ${OPENSSL_INCLUDE_DIR}
 )
 
 target_link_libraries(tlsfp_phase2_lib
@@ -52,13 +64,18 @@ target_link_libraries(tlsfp_phase2_lib
         Threads::Threads
 )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+# Link Windows Socket API library when compiling on Windows
+if(WIN32)
+    target_link_libraries(tlsfp_phase2_lib PUBLIC ws2_32)
+endif()
+
+# 4. OS-Agnostic Compiler Flags
+if(MSVC)
+    target_compile_options(tlsfp_phase2_lib PRIVATE /W4 /O2)
+else()
     target_compile_options(tlsfp_phase2_lib PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
+        -Wall -Wextra -Wpedantic
         $<$<CONFIG:Release>:-O3>
-        $<$<CONFIG:Release>:-march=native>
         $<$<CONFIG:Debug>:-g3>
     )
     target_compile_options(tlsfp_phase2_lib PUBLIC
@@ -80,22 +97,46 @@ target_link_libraries(tlsfp_phase2
         tlsfp_phase2_lib
 )
 
-# Enable Testing and GoogleTest
+# Unit tests (ctest)
 enable_testing()
-find_package(GTest QUIET)
-if(NOT GTest_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
+
+# 1. JA4T standalone test runner
+add_executable(tlsfp_phase2_tests
+    tests/test_ja4t.cpp
+)
+target_link_libraries(tlsfp_phase2_tests
+    PRIVATE
+        tlsfp_phase2_lib
+)
+add_test(NAME ja4t COMMAND tlsfp_phase2_tests)
+
+# 2. GoogleTest-based unit tests
+# Always build GoogleTest from source via FetchContent as static libraries.
+# This eliminates macOS dyld @rpath errors, Conda/Homebrew shared dylib conflicts,
+# and SIP stripping DYLD_LIBRARY_PATH during test execution.
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# GoogleTest must use the same container annotations and sanitizer runtime as
+# its consumers; prebuilt Homebrew libraries are not compatible with ASan here.
+if(NOT MSVC)
+    add_compile_options($<$<CONFIG:Debug>:-fsanitize=address,undefined>)
+    add_link_options($<$<CONFIG:Debug>:-fsanitize=address,undefined>)
+endif()
+FetchContent_MakeAvailable(googletest)
+
+if(NOT TARGET GTest::gtest)
     add_library(GTest::gtest ALIAS gtest)
+endif()
+if(NOT TARGET GTest::gtest_main)
     add_library(GTest::gtest_main ALIAS gtest_main)
 endif()
 
-# Test Executable Target
 add_executable(unit_tests
     tests/test_fingerprints.cpp
     tests/test_ech_parser.cpp
@@ -106,7 +147,6 @@ add_executable(unit_tests
 target_compile_definitions(unit_tests PRIVATE
     TLSFP_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
-
 target_link_libraries(unit_tests
     PRIVATE
         tlsfp_phase2_lib
@@ -114,10 +154,7 @@ target_link_libraries(unit_tests
         GTest::gtest_main
 )
 
-# OS-Agnostic RPATH: Automatically embed runtime search paths of linked targets
-set_target_properties(unit_tests PROPERTIES
-    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest_main>;$<TARGET_FILE_DIR:GTest::gtest>"
-)
-
 include(GoogleTest)
-gtest_discover_tests(unit_tests)
+gtest_discover_tests(unit_tests
+    DISCOVERY_MODE PRE_TEST
+)

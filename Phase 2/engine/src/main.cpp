@@ -25,10 +25,13 @@ void print_usage(const char *prog) {
               << "  -r <file>        Read and analyze offline PCAP/PCAPNG file\n"
               << "  -i <interface>   Capture live packets from network interface (requires root)\n"
               << "  -f <filter>      BPF packet filter string (default: \"tcp\")\n"
+              << "  -t               Enable JA4T/JA4TS TCP fingerprinting and cross-layer alerts\n"
               << "  -v               Enable verbose dissection of TLS handshake fields\n"
               << "  -q               Quiet / benchmark mode (suppress output, measure pps)\n"
+              << "  -j <threads>     Number of worker threads (default: auto-detect CPU cores)\n"
               << "  -u               Interactively prompt to label unknown fingerprints\n"
               << "  --json <file>    Create a new JSON Lines file of connection summaries\n"
+              << "  -c <catalog>     Load an extra catalog JSON (seed schema, e.g. ja4t / expected_os lab records)\n"
               << "  -h               Show this help message and exit\n";
 }
 
@@ -40,7 +43,7 @@ int main(int argc, char *argv[]) {
 
     int opt = 0;
     const option long_options[] = {{"json", required_argument, nullptr, 1000}, {nullptr, 0, nullptr, 0}};
-    while ((opt = getopt_long(argc, argv, "r:i:f:vquh", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "r:i:f:c:tvquj:h", long_options, nullptr)) != -1) {
         switch (opt) {
             case 1000:
                 if (!*optarg) {
@@ -58,6 +61,12 @@ int main(int argc, char *argv[]) {
             case 'f':
                 options.bpf_filter = optarg;
                 break;
+            case 'c':
+                options.extra_catalog_filename = optarg;
+                break;
+            case 't':
+                options.enable_ja4t = true;
+                break;
             case 'v':
                 options.verbose = true;
                 break;
@@ -66,6 +75,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'u':
                 options.prompt_unknown = true;
+                break;
+            case 'j':
+                options.num_threads = std::stoul(optarg);
                 break;
             case 'h':
             default:
@@ -108,10 +120,14 @@ int main(int argc, char *argv[]) {
     if (!options.quiet) {
         bool is_live = !options.interface_name.empty();
         std::cout << "\n\033[1;32m=== " << (is_live ? "Live Capture Summary" : "Processing Summary") << " ===\033[0m\n"
-                  << "Total Packets:    " << stats.total_packets << "\n"
-                  << "ClientHellos:     " << stats.client_hellos << "\n"
-                  << "ServerHellos:     " << stats.server_hellos << "\n"
-                  << (is_live ? "Capture Duration: " : "Elapsed Time:     ") 
+                  << "Total Packets:    " << stats.total_packets.load() << "\n"
+                  << "ClientHellos:     " << stats.client_hellos.load() << "\n"
+                  << "ServerHellos:     " << stats.server_hellos.load() << "\n";
+        if (options.enable_ja4t) {
+            std::cout << "TCP SYN/SYN-ACK:  " << stats.tcp_syns.load() << " / " << stats.tcp_synacks.load() << "\n"
+                      << "Cross-layer Alerts: " << stats.cross_layer_alerts.load() << "\n";
+        }
+        std::cout << (is_live ? "Capture Duration: " : "Elapsed Time:     ")
                   << std::fixed << std::setprecision(is_live ? 2 : 4) 
                   << stats.elapsed_seconds() << "s\n";
 
@@ -126,9 +142,9 @@ int main(int argc, char *argv[]) {
         std::cout << "\n\033[1;36m====================================================\033[0m\n"
                   << "\033[1;37m            Benchmark Execution Summary             \033[0m\n"
                   << "\033[1;36m====================================================\033[0m\n"
-                  << "Total Packets Scanned : " << stats.total_packets << "\n"
-                  << "ClientHellos Found    : " << stats.client_hellos << "\n"
-                  << "ServerHellos Found    : " << stats.server_hellos << "\n"
+                  << "Total Packets Scanned : " << stats.total_packets.load() << "\n"
+                  << "ClientHellos Found    : " << stats.client_hellos.load() << "\n"
+                  << "ServerHellos Found    : " << stats.server_hellos.load() << "\n"
                   << "Execution Time        : " << std::fixed << std::setprecision(3) 
                   << (stats.elapsed_seconds() * 1000.0) << " ms (" 
                   << std::setprecision(4) << stats.elapsed_seconds() << " s)\n"
