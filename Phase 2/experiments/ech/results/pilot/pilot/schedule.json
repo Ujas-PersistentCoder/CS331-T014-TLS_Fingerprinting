@@ -1,0 +1,17 @@
+[
+  {
+    "attempt_id": "pilot-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "pilot-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "pilot-grease",
+    "mode": "grease",
+    "profile": "A"
+  }
+]

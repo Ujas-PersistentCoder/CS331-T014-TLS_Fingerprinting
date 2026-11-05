@@ -1,0 +1,166 @@
+{
+  "accepted_joined": 60,
+  "anomalies": [],
+  "comparisons": [
+    {
+      "distinct_groups": 60,
+      "features": "ja3",
+      "profiles": {
+        "A": {
+          "distinct": 30,
+          "distinct_per_session": {
+            "session-1": 10,
+            "session-2": 10,
+            "session-3": 10
+          },
+          "groups_present_in_every_session": 0,
+          "modal_share": 0.03333333333333333,
+          "observations": 30
+        },
+        "B": {
+          "distinct": 30,
+          "distinct_per_session": {
+            "session-1": 10,
+            "session-2": 10,
+            "session-3": 10
+          },
+          "groups_present_in_every_session": 0,
+          "modal_share": 0.03333333333333333,
+          "observations": 30
+        }
+      },
+      "shared_groups": 0,
+      "shared_observation_fraction": 0.0
+    },
+    {
+      "distinct_groups": 60,
+      "features": "ja3_augmented",
+      "profiles": {
+        "A": {
+          "distinct": 30,
+          "distinct_per_session": {
+            "session-1": 10,
+            "session-2": 10,
+            "session-3": 10
+          },
+          "groups_present_in_every_session": 0,
+          "modal_share": 0.03333333333333333,
+          "observations": 30
+        },
+        "B": {
+          "distinct": 30,
+          "distinct_per_session": {
+            "session-1": 10,
+            "session-2": 10,
+            "session-3": 10
+          },
+          "groups_present_in_every_session": 0,
+          "modal_share": 0.03333333333333333,
+          "observations": 30
+        }
+      },
+      "shared_groups": 0,
+      "shared_observation_fraction": 0.0
+    },
+    {
+      "distinct_groups": 1,
+      "features": "ja4",
+      "profiles": {
+        "A": {
+          "distinct": 1,
+          "distinct_per_session": {
+            "session-1": 1,
+            "session-2": 1,
+            "session-3": 1
+          },
+          "groups_present_in_every_session": 1,
+          "modal_share": 1.0,
+          "observations": 30
+        },
+        "B": {
+          "distinct": 1,
+          "distinct_per_session": {
+            "session-1": 1,
+            "session-2": 1,
+            "session-3": 1
+          },
+          "groups_present_in_every_session": 1,
+          "modal_share": 1.0,
+          "observations": 30
+        }
+      },
+      "shared_groups": 1,
+      "shared_observation_fraction": 1.0
+    },
+    {
+      "distinct_groups": 1,
+      "features": "ja4_augmented",
+      "profiles": {
+        "A": {
+          "distinct": 1,
+          "distinct_per_session": {
+            "session-1": 1,
+            "session-2": 1,
+            "session-3": 1
+          },
+          "groups_present_in_every_session": 1,
+          "modal_share": 1.0,
+          "observations": 30
+        },
+        "B": {
+          "distinct": 1,
+          "distinct_per_session": {
+            "session-1": 1,
+            "session-2": 1,
+            "session-3": 1
+          },
+          "groups_present_in_every_session": 1,
+          "modal_share": 1.0,
+          "observations": 30
+        }
+      },
+      "shared_groups": 1,
+      "shared_observation_fraction": 1.0
+    }
+  ],
+  "complete": true,
+  "excluded": 0,
+  "expected_attempts": 60,
+  "pilot_attempts": 3,
+  "scheduled": 60,
+  "session_counts": [
+    {
+      "attempted": 20,
+      "client_records": 20,
+      "complete_pairs": 20,
+      "eligible": 20,
+      "endpoint_accepted_agreements": 20,
+      "passive_rows": 20,
+      "scheduled": 20,
+      "server_records": 20,
+      "session": "session-1"
+    },
+    {
+      "attempted": 20,
+      "client_records": 20,
+      "complete_pairs": 20,
+      "eligible": 20,
+      "endpoint_accepted_agreements": 20,
+      "passive_rows": 20,
+      "scheduled": 20,
+      "server_records": 20,
+      "session": "session-2"
+    },
+    {
+      "attempted": 20,
+      "client_records": 20,
+      "complete_pairs": 20,
+      "eligible": 20,
+      "endpoint_accepted_agreements": 20,
+      "passive_rows": 20,
+      "scheduled": 20,
+      "server_records": 20,
+      "session": "session-3"
+    }
+  ]
+}

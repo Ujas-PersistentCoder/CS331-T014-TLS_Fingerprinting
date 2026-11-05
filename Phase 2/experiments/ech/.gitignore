@@ -1,0 +1,12 @@
+.local/
+__pycache__/
+.DS_Store
+
+# Private endpoint keys, including keys generated outside the local cache.
+tls-key.pem
+ech-key.bin
+
+# Local command transcripts. Keep capture/drop logs and endpoint evidence.
+/results/build-record/build.log
+/results/**/replay.log
+/results/pilot/prepare.log

@@ -1,0 +1,102 @@
+[
+  {
+    "attempt_id": "s1-01-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-01-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-02-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-02-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-03-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-03-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-04-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-04-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-05-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-05-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-06-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-06-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-07-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-07-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-08-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-08-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-09-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-09-B",
+    "mode": "accepted",
+    "profile": "B"
+  },
+  {
+    "attempt_id": "s1-10-A",
+    "mode": "accepted",
+    "profile": "A"
+  },
+  {
+    "attempt_id": "s1-10-B",
+    "mode": "accepted",
+    "profile": "B"
+  }
+]

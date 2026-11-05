@@ -12,7 +12,7 @@
 
 ECH conceals the intended service name and other sensitive ClientHello fields. Our contribution is a bounds-checked observer, an explanation of its visibility limits, and a small labeled evaluation. A finding that a feature adds no useful discrimination is a valid result.
 
-**Required scope:** TCP capture; ECH extension decoding; correlation of ClientHello with the server's initial response; structured output; four labeled cases (accepted real ECH, rejected real ECH, GREASE ECH, and ECH absent); and controlled measurements of lengths and suite fields. Preserve standard JA3/JA3S and existing JA4/JA4S behavior, including extension permutation and GREASE handling. The project's JA3/JA3S validation requirement remains a prerequisite to fingerprint scope expansion.
+**Current required scope, revised November 5, 2026:** TCP capture; ECH extension decoding; correlation of ClientHello with the server's initial response; structured output; a local three-attempt pilot (accepted ECH for two controlled profiles and one GREASE control); and 60 accepted connections across three sessions for the H3 fingerprint comparison. The expanded four-case corpus and controlled hostname-length study are deferred. Preserve standard JA3/JA3S and existing JA4/JA4S behavior, including extension permutation and GREASE handling. The project's JA3/JA3S validation requirement remains a prerequisite to fingerprint scope expansion.
 
 **Optional scope:** HRR sequence analysis and live HRR experiments, cross-connection `config_id` analysis, and broader browser comparisons. Retain HRR theory below, but do not make it a prerequisite for the core deliverable. QUIC and a general-purpose TCP/TLS reconstruction framework are outside this implementation's scope.
 
@@ -189,6 +189,31 @@ Record the capture point and relevant offload settings with any packetization me
 
 ## 6. Experiments & Evaluation
 
+The reduced checkpoint is implemented under `Phase 2/experiments/ech/`; its README
+is the manual collection/replay guide. The original H2/H4 studies below describe
+deferred extensions. Current results cover H3 on two BoringSSL configurations and
+one independently established GREASE control.
+
+The pinned BoringSSL revision is `df870ed7fa51110edb872beb3357a44d20e1ce56`.
+Profile A offers TLS X25519 and profile B P-256, both with ALPN `h2`. Their common
+ECH configuration uses X25519 HPKE, HKDF-SHA256, AES-128-GCM and maximum name length
+64. Public configuration bytes, endpoint logs, PCAPs and engine JSON are retained
+under the experiment's `results/`. Keys and dependency/build directories are local
+and ignored. Independent labels never enter the passive engine's JSON schema.
+
+All three pilot cases and all 60 accepted corpus connections uniquely join with
+no capture drops, exclusions or HRRs. Both endpoints agree on acceptance and the
+client verifies the certificate/hostname. TShark verifies pilot wire fields and
+fingerprints after accounting for GREASE signature IDs in its JA4 calculation.
+JA3 has 60 distinct values while permutation remains enabled. Both profiles
+share one JA4, `t13d0308h2_55b375c5d22e_0365bc7f0f41`. Every accepted envelope has
+KDF 1, AEAD 1, enc length 32 and ciphertext length 176, so augmentation leaves
+both baseline groupings identical. The selected ECH features add no discrimination
+on this corpus. There is no recognition-accuracy, browser-identity or latency
+result. All 15 lab checks and 123 existing engine tests pass; seven saved captures
+preserve all 90 ordered fingerprints and 42 normalized connection summaries
+against clean checkpoint 2. The engine implementation is unchanged.
+
 ### 6.1 Small Evaluation Matrix
 
 | Study | Controlled comparison | What may be concluded |
@@ -218,7 +243,11 @@ Use a dedicated client process/profile, TCP transport with QUIC disabled and ver
 
 A public diagnostic endpoint can corroborate an accepted case, but associate its response with the actual connection and retain supporting endpoint evidence. One navigation may create several connections or retries. Store pcaps, manifests, and label provenance for repeatable analysis; public-service behavior is not guaranteed reproducible later.
 
-### 7.2 Four Required Cases
+### 7.2 Original Expanded Four-Case Study — Deferred
+
+The reduced checkpoint requires the two accepted profile pilots and one GREASE
+control described above. Rejected-real and absent collections in this original
+matrix remain future work.
 
 | Case | How to obtain it | Label requirement |
 | :--- | :--- | :--- |
@@ -241,15 +270,15 @@ For an independently established real offer, a corresponding outer-handshake sec
 
 1. **Pilot and decoder:** verify capture/label feasibility; implement isolated extension decoding and fixtures. Cross-check a real envelope manually against the wire layout and with an independent dissector where supported.
 2. **Core integration:** add minimal bidirectional summaries, structured output, and the targeted record-processing fixes. Verify both client and server directions and preserve existing fingerprint parity on saved captures.
-3. **Labeled corpus:** collect the four cases with provenance and repeat sessions. Publish missing/unlabeled counts rather than treating them as successful validation.
-4. **Measurements:** run the controlled H2 study and H3 baseline comparison; add a second browser when practical. Record null results and limits.
+3. **Reduced labeled corpus:** verify the three-attempt local pilot, then collect 10 accepted connections per profile in each of three sessions. Retain every attempted, unmatched or excluded record.
+4. **Measurements:** run the H3 baseline comparison and record null results and limits. H2, the expanded four-case corpus and additional implementations remain deferred.
 5. **Optional extensions:** only after the core works, add validated HRR analysis or offline I4/I5 signals. Omit untested features from demonstrated capability claims.
 
 Required parser fixtures include `0x001b` without ECH, a valid outer body, truncated capture, contradictory complete lengths, trailing bytes, duplicate ECH, cleartext `0xfd00`, inner marker at the external tap, and empty `enc` with known/unknown message context. Integration checks cover segmented records, coalesced server records, retransmission deduplication, unsupported sizes, and absence versus incomplete capture. Optional analysis fixtures cover CH1/HRR/CH2, including unchanged rejected-real and GREASE cases; synthetic fixtures establish rule behavior, not empirical real-versus-GREASE accuracy.
 
 ## 9. Presentation & Defensible Claims
 
-Present the visible wire layout, observation/interpretation/ground-truth distinction, labeled corpus, controlled length result, incremental feature comparison, and a results-and-limits slide. Include sample counts, classification coverage where applicable, and supported transport limits. HRR behavior is theory unless separately validated.
+Present the visible wire layout, observation/interpretation/ground-truth distinction, reduced labeled corpus, incremental feature comparison, and a results-and-limits slide. Include sample counts, descriptive repeatability and collision results, and supported transport limits. The controlled hostname-length study is deferred. HRR behavior is theory unless separately validated.
 
 Use these statements consistently in the report and viva:
 
