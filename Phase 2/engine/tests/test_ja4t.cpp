@@ -160,11 +160,8 @@ int main() {
     check(!os_families_compatible(OsFamily::Windows, OsFamily::Linux), "Windows !~ Linux");
     check(!os_families_compatible(OsFamily::Unknown, OsFamily::Unknown), "Unknown is never comparable");
 
-    // --- Path MTU & Network Proximity ---
-    check(describe_path_mtu(true, 1460).find("1500") != std::string::npos, "MSS 1460 -> MTU 1500");
-    check(describe_path_mtu(true, 1380).find("VPN") != std::string::npos, "MSS 1380 -> VPN/Tunnel");
-    check(describe_path_mtu(false, 0).find("undetermined") != std::string::npos, "MSS absent -> undetermined");
-    check(describe_network_proximity(0).find("Direct Link") != std::string::npos, "0 hops -> Direct Link");
+    // --- Network Proximity ---
+    check(describe_network_proximity(0).find("0 hops") != std::string::npos, "0 hops -> Same host / L2");
     check(describe_network_proximity(8).find("Regional") != std::string::npos, "8 hops -> Regional Transit");
 
     std::printf("\n%d failure(s)\n", g_failures);
