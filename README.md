@@ -1,10 +1,10 @@
 # High-Speed TLS Fingerprinting Engine
-**CS 331: Computer Networks | Spring 2026**  
+**CS 331: Computer Networks | Fall 2026**  
 **Team T014 — Project 11: TLS Fingerprinting**
 
 ---
 
-## 👥 Team Members
+## Team Members
 
 | Name | Roll Number |
 | :--- | :---: |
@@ -17,22 +17,22 @@
 
 ---
 
-## 📌 Executive Summary
+## Executive Summary
 
 Modern encrypted traffic analysis requires observing client identities, configurations, and anomalies **without decrypting user payload data**. This project implements a comprehensive, passive TLS fingerprinting suite capable of line-rate wire inspection on live interfaces and offline packet captures.
 
 The repository spans two evolutionary milestones:
 1. **Phase 1 (Foundational Fingerprinting)**: Dual Python and C++ implementations of Salesforce **JA3/JA3S** and FoxIO **JA4/JA4S**, an interactive PyQt6 graphical user interface, and an analysts' catalog backed by Redis with zero-config JSON fallback.
-2. **Phase 2 (Modernized High-Speed Engine & Protocol Defense)**: A high-throughput, multi-threaded C++17 engine (**`tlsfp_phase2`**) scaling past 50,000–60,000 packets/second. It extends classical TLS inspection into evasive transport challenges:
+2. **Phase 2 (Modernized High-Speed Engine & Protocol Defense)**: A high-throughput, multi-threaded C++17 engine (**`tlsfp_phase2`**). It extends classical TLS inspection into evasive transport challenges:
    * **Two-Tier TCP Stream Reassembly**: Transparent handling of out-of-order packets, sequence rollover, and hardware offloads (Generic Receive Offload / Large Receive Offload up to 7KB jumbo frames).
    * **JA4T / JA4TS TCP Stack Fingerprinting**: Passive TCP SYN/SYN-ACK options profiling and network distance estimation.
    * **Cross-Layer OS Impersonation Detection**: Corroborating TCP stack signatures against claimed TLS application environments (e.g., catching malicious bots masquerading as Windows browsers from Linux network stacks).
-   * **Encrypted Client Hello (ECH / RFC 8744)**: Outer ClientHello parsing, HPKE cryptographic parameter extraction, GREASE vs. real ECH discrimination, and stateful connection lifecycle tracking.
+   * **Encrypted Client Hello (ECH / RFC 8744)**: Outer ClientHello parsing, HPKE cryptographic parameter extraction, and stateful connection lifecycle tracking.
    * **Post-Quantum TLS (PQ-TLS)**: Wire-level inspection of quantum-safe key shares (Kyber-768 / ML-KEM-768 per RFC 10024), duplicate extension/key share validation, and offer-to-selection posture correlation.
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 The repository is cleanly partitioned into Phase 1 and Phase 2 modules, each containing dedicated source code, test suites, experimental testbeds, presentation decks, technical reports, and AI disclosures:
 
@@ -69,19 +69,19 @@ CS331-T014-TLS_Fingerprinting/
 
 ---
 
-## ⚡ Quick Navigation & Reproduction Guides
+## Quick Navigation & Reproduction Guides
 
 To build, test, and run either phase of the project, follow their respective dedicated guides:
 
-* 👉 **[Phase 2 Detailed Guide (High-Speed Engine, ECH, PQ-TLS, JA4T)](file:///Phase%202/README.md)**  
+* [Phase 2 Detailed Guide (High-Speed Engine, ECH, PQ-TLS, JA4T)](Phase%202/README.md)  
   *How to build `tlsfp_phase2`, run all 188 unit tests, evaluate bundled 500k-packet benchmarks, and inspect real-world Encrypted Client Hello and Post-Quantum TLS traffic.*
 
-* 👉 **[Phase 1 Detailed Guide (Python Engine, PyQt6 GUI, Classical C++ Engine)](file:///Phase%201/README.md)**  
+* [Phase 1 Detailed Guide (Python Engine, PyQt6 GUI, Classical C++ Engine)](Phase%201/README.md)  
   *How to launch the PyQt6 analyst GUI, connect to Redis, and cross-benchmark Python vs. C++ throughput.*
 
 ---
 
-## 🛠️ System Prerequisites
+## System Prerequisites
 
 The project is natively developed and evaluated on **Ubuntu 24.04 LTS** (including **WSL 2**) and is compatible with modern POSIX systems (Linux / macOS).
 
@@ -101,7 +101,7 @@ brew services start redis
 
 ---
 
-## 🧪 Quick Test: Running the Phase 2 Engine
+## Quick Test: Running the Phase 2 Engine
 
 Build the Phase 2 engine directly from the repository root:
 

@@ -1,10 +1,9 @@
 # High-Speed TLS Fingerprinting Engine (Phase 2)
-**CS 331: Computer Networks | Spring 2026**  
-**Team T014 — Project 11: Modernized Wire Inspection & Protocol Defense**
+**CS 331: Computer Networks | Fall 2026**
 
 ---
 
-## 📖 1. Introduction
+## 1. Introduction
 
 Passive TLS fingerprinting extracts immutable configuration parameters from unencrypted handshake metadata (cipher suites, extensions, elliptic curves, signature algorithms, and ALPN) to identify client applications without decrypting network payload. 
 
@@ -19,7 +18,7 @@ While Phase 1 established foundational implementations of **JA3/JA3S** and **JA4
 
 ---
 
-## 🔬 2. Theoretical Foundations & Architecture
+## 2. Theoretical Foundations & Architecture
 
 ```
                    ┌──────────────────────────────────────────────┐
@@ -57,7 +56,7 @@ While Phase 1 established foundational implementations of **JA3/JA3S** and **JA4
 Naive TLS sniffers process packets in isolation, failing whenever a `ClientHello` spans multiple TCP segments. The Phase 2 engine implements a stateful **Two-Tier Accumulator**:
 * **Tier 1 (Fast-Path)**: Zero-copy in-place parsing when a packet contains a complete TLS record header and payload within a single segment. Operates at near memory-bandwidth speeds.
 * **Tier 2 (Slow-Path Reassembly)**: If a TLS record header indicates `length > segment_bytes`, or segments arrive out of sequence, the flow is promoted to Tier 2 reassembly:
-  * Buffers contiguous bytes up to 16KB per flow.
+  * Buffers contiguous bytes up to 8KB (`ACCUMULATOR_BUFFER_SIZE = 8192`) per flow.
   * Correctly handles **TCP sequence number rollovers** ($2^{32}-1 \to 0$).
   * Detects duplicate retransmissions and drops overlapping redundant prefixes.
   * Enforces stale-flow eviction timeouts to prevent memory exhaustion under asymmetric traffic.
@@ -95,9 +94,8 @@ ECH replaces the legacy cleartext Server Name Indication (SNI) by wrapping the c
 
 #### Engine Capabilities:
 1. **Wire-Level Dissection**: Extracts extension `0xfe0d`, decoding the HPKE cipher suite, KDF ID, AEAD ID, Config ID, public encapsulated key, and ciphertext payload.
-2. **GREASE vs. Real ECH Discrimination**: Differentiates browser GREASE probes from authentic ECH offers based on payload heuristics and outer extensions.
-3. **Connection Lifecycle State Tracking**: Follows bidirectional flows from TCP SYN, through potential `HelloRetryRequest` (HRR) renegotiations, to final server cipher acceptance.
-4. **Structured Telemetry**: Emits standard newline-delimited JSON (`--json <file>`) tracking full connection framing, negotiation parameters, and anomalies.
+2. **Connection Lifecycle State Tracking**: Follows bidirectional flows from TCP SYN, through potential `HelloRetryRequest` (HRR) renegotiations, to final server cipher acceptance.
+3. **Structured Telemetry**: Emits standard newline-delimited JSON (`--json <file>`) tracking full connection framing, negotiation parameters, and anomalies.
 
 ---
 
@@ -106,12 +104,13 @@ To counter future "Harvest Now, Decrypt Later" quantum attacks, TLS 1.3 clients 
 
 #### Engine Capabilities:
 1. **Supported Groups Decoding**:
-   * Draft: `0x6399` (`X25519Kyber768Draft00`)
-   * NIST Standard: `0x11ec` (`SecP256r1MLKEM768`), `0x11ed` (`X25519MLKEM768`)
+   * Drafts: `0x6399` (`X25519Kyber768Draft00`), `0x639a` (`SecP256r1Kyber768Draft00`)
+   * NIST Standards: `0x11ec` (`X25519MLKEM768`), `0x11eb` (`SecP256r1MLKEM768`), `0x11ed` (`SecP384r1MLKEM1024`)
 2. **Wire-Level Key Size Validation (RFC 10024)**:
-   * `X25519Kyber768Draft00`: Exact expected key size 1184 bytes (Client) / 1088 bytes (Server).
-   * `X25519MLKEM768`: Exact expected key size 1216 bytes (Client) / 1120 bytes (Server).
-   * Detects truncated, oversized, or malformed key shares.
+   * `0x11ec` (`X25519MLKEM768`) & `0x6399` (`X25519Kyber768Draft00`): 1216B Client (1184B encap + 32B X25519) / 1120B Server (1088B ciphertext + 32B X25519).
+   * `0x11eb` (`SecP256r1MLKEM768`) & `0x639a` (`SecP256r1Kyber768Draft00`): 1249B Client (1184B encap + 65B EC) / 1153B Server (1088B ciphertext + 65B EC).
+   * `0x11ed` (`SecP384r1MLKEM1024`): 1665B Client (1568B encap + 97B EC) / 1665B Server (1568B ciphertext + 97B EC).
+   * Strict wire anomaly detection: flags `PQTLS_MALFORMED_SHARE_LENGTH`, truncated shares, and duplicate key share extensions.
 3. **Offer-to-Selection Posture Analysis**:
    * Evaluates client proactive shares: `PROACTIVE_SHARE_VALID`, `NO_PQ_OFFERED`, `UNKNOWN_SHARE`.
    * Correlates client offers against server choices:
@@ -134,7 +133,7 @@ To scale past **50,000–60,000+ packets/sec**, the engine adopts a lock-free pa
 
 ---
 
-## 💻 3. Command-Line Reference
+## 3. Command-Line Reference
 
 ```text
 Usage: tlsfp_phase2 [OPTIONS]
@@ -159,7 +158,7 @@ Options:
 
 ---
 
-## 🚀 4. How to Clone, Build, and Run
+## 4. How to Clone, Build, and Run
 
 ### 4.1 System Prerequisites
 Ensure standard C++17 build tools, CMake, libpcap, and OpenSSL development headers are installed:
@@ -238,7 +237,7 @@ Sample output:
  CLIENT  10.7.37.16:49678 ──▶ 192.178.177.95:443
    │  JA3:  ae4cd3a6bcef16e54026d4615523f62d  [<unknown>]
    │  JA4:  t13d1517h2_8daaf6152771_cb7bf5808d99  [Chromium (browser)]
-   │  JA4T: 65535_2-1-3-1-1-4_1460_8  [inferred: Windows]  TTL 128, 0 hops
+   │  JA4T: 64240_2-1-3-1-1-4_1460_8  [inferred: Windows]  TTL 128, 0 hops
    │  [V-ClientHello] status=complete (complete ClientHello framing)
    │  [V-Outer SNI]   safebrowsing.googleapis.com
    │  [V-ECH #1] status=complete (decoded) variant=0 kdf_id=1 aead_id=1 config_id=31 enc_length=32 ciphertext_length=176
@@ -246,10 +245,12 @@ Sample output:
    │  [V-PQTLS-Keys]  0x11ec (X25519MLKEM768) 1216B, 0x001d (x25519) 32B
    │  [V-PQTLS-Share] PROACTIVE_SHARE_VALID
    │  [V-PQTLS-Check] ok
+[Connection summary] id=71 reason=final_server_hello acceptance=unverified
 
  SERVER  192.178.177.95:443 ──▶ 10.7.37.16:49678
    │  JA3S: 907bf3ecef1c987c889946b737b43de8  [<unknown>]
    │  JA4S: t130200_1302_234ea6891581  [<unknown>]
+   │  JA4TS: 65535_2-1-1-4-1-3_1412_8  [inferred: Linux options, TTL 128]  TTL 120, 8 hops
    │  [V-PQTLS-Group]  0x11ec (X25519MLKEM768), post-quantum hybrid, key 1120B
    │  [V-PQTLS-Result] HYBRID_SELECTED_OBSERVED
    │  [V-PQTLS-Check]  ok
@@ -276,7 +277,7 @@ sudo "./Phase 2/code/engine/build/tlsfp_phase2" -i eth0 -f "tcp port 443" -v -p 
 
 ---
 
-## 🧪 5. Experimental Testbeds & Artifacts
+## 5. Experimental Testbeds & Artifacts
 
 The `Phase 2` directory includes experimental laboratories and empirical test suites:
 
@@ -292,7 +293,7 @@ The `Phase 2` directory includes experimental laboratories and empirical test su
 
 ---
 
-## 📁 6. Source File Structure
+## 6. Source File Structure
 
 ```text
 Phase 2/code/engine/
